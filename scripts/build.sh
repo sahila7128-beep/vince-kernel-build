@@ -11,6 +11,7 @@ KERNEL=609a588f30d61a7f04e2061ab59c4f9c8c49aa6d
 BAKA=3380d41f2043644d0ef6c0e0e91be6b229024d00
 SUSFS=71345ded5af28f55d76ebcdc7a9df9cea56111e1
 ANYKERNEL=783f109bdbcacfea6e4c7bc232437afe796fae28
+NOMOUNT=07efa370edb784327ee03877c9882ab2599a15ce
 
 get_source() {
  local url="$1" dest="$2" sha="$3"
@@ -24,6 +25,7 @@ get_source() {
 get_source https://github.com/rahmatsobrian/kernel_xiaomi_vince_4.9.337_zerotwo.git "$WORK/ZeroTwo" "$KERNEL"
 get_source https://github.com/Baka-SU/BakaSU.git "$WORK/BakaSU" "$BAKA"
 get_source https://github.com/wxx9248/susfs4ksu.git "$WORK/susfs4ksu" "$SUSFS"
+get_source https://github.com/maxsteeel/nomount.git "$WORK/NoMount" "$NOMOUNT"
 K="$WORK/ZeroTwo"
 P="$WORK/susfs4ksu/kernel_patches"
 
@@ -80,6 +82,36 @@ for name, replacements in symbols.items():
 PY
 grep -q 'SUSFS_VERSION "v2.3.0"' "$K/include/linux/susfs.h"
 
+# Built-in NoMount is required for legacy 4.9: GKI LKMs included in module
+# target only 5.10+ and the user's module requires NoMount kernel API v22+.
+NM_SOURCE="$WORK/NoMount/kernel/src"
+test ! -e "$K/fs/nomount"
+grep -q '^#define NOMOUNT_BASE_VERSION "22"' "$NM_SOURCE/nomount.h"
+ln -s ../../NoMount/kernel/src "$K/fs/nomount"
+printf '\nobj-$(CONFIG_NOMOUNT) += nomount/\n' >> "$K/fs/Makefile"
+python3 - "$K/fs/Kconfig" <<'PY'
+from pathlib import Path
+import sys
+f=Path(sys.argv[1]); data=f.read_text()
+anchor="\nendmenu\n"
+assert data.count(anchor)>=1
+at=data.rfind(anchor)
+f.write_text(data[:at]+'\nsource "fs/nomount/Kconfig"\n'+data[at:])
+PY
+
+# ZeroTwo /proc/config.gz currently exposes vince-stock_defconfig instead of
+# the actual build config; ReSuSFS mistakes built-in SUSFS for a missing LKM.
+# Expose truthful config so built-in SUSFS detection succeeds.
+python3 - "$K/kernel/Makefile" <<'PY'
+from pathlib import Path
+import sys
+f=Path(sys.argv[1]); s=f.read_text()
+before='$(obj)/config_data.gz: arch/arm64/configs/vince-stock_defconfig FORCE'
+after='$(obj)/config_data.gz: $(KCONFIG_CONFIG) FORCE'
+assert s.count(before)==1, 'Unexpected kernel/Makefile rule'
+f.write_text(s.replace(before,after,1))
+PY
+
 # Preserve all original hardware settings and remove only stale KSU options.
 python3 - "$K/arch/arm64/configs/vince-perf_defconfig" <<'PY'
 from pathlib import Path
@@ -103,6 +135,7 @@ CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
 CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
 CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 CONFIG_KSU_SUSFS_SUS_MAP=y
+CONFIG_NOMOUNT=y
 """
 f.write_text(s)
 PY
@@ -114,6 +147,8 @@ KERNEL_SOURCE_COMMIT=$KERNEL
 BAKASU_COMMIT=$BAKA
 SUSFS_4_9_PORT_COMMIT=$SUSFS
 ANYKERNEL_COMMIT=$ANYKERNEL
+NOMOUNT_COMMIT=$NOMOUNT
+NOMOUNT_KERNEL_API=22
 SUSFS_VERSION=v2.3.0
 DEVICE_BOOT_TESTED=NO
 MODULE_INSTALL_TESTED=NO
@@ -129,7 +164,7 @@ export CLANG_TRIPLE=aarch64-linux-gnu-
 export KBUILD_BUILD_USER=VinceBuilder
 export KBUILD_BUILD_HOST=GitHubActions
 make O=out ARCH=arm64 vince-perf_defconfig
-for sym in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SUS_MAP; do
+for sym in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SUS_MAP NOMOUNT IKCONFIG_PROC; do
  grep -qx "CONFIG_$sym=y" out/.config || { echo "Missing CONFIG_$sym=y" >&2; exit 1; }
 done
 ! grep -q '^CONFIG_KSU_MANUAL_HOOK=y' out/.config
@@ -153,7 +188,7 @@ grep -qx 'BLOCK=/dev/block/bootdevice/by-name/boot;' "$AK/anykernel.sh"
 find "$AK" -maxdepth 1 -type f -name 'Image*' -delete
 cp "$IMG" "$AK/Image.gz-dtb"
 cp "$OUT/MANIFEST.txt" "$AK/BUILD-MANIFEST.txt"
-ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-vince-UNTESTED.zip"
+ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
 unzip -Z1 "$ZIP" | grep -qx "Image.gz-dtb"
