@@ -55,7 +55,9 @@ def patch_sys(src):
         "#endif\n", "kernel/sys.c")
     marker = "SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)\n{\n"
     start = src.index(marker)
-    block = src[start:]
+    # Restrict replacements to the newuname function; other uname variants also contain memcpy.
+    end = src.index("\n}\n", start) + len("\n}")
+    block = src[start:end]
     block = once(block, "\tmemcpy(&tmp, utsname(), sizeof(tmp));\n\tup_read(&uts_sem);",
         "\tmemcpy(&tmp, utsname(), sizeof(tmp));\n"
         "#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME\n"
@@ -71,7 +73,7 @@ def patch_sys(src):
         "\t\treturn 0;\n"
         "#endif\n"
         "\toverride_custom_release(name->release, sizeof(name->release));", "kernel/sys.c")
-    return src[:start] + block
+    return src[:start] + block + src[end:]
 
 
 def main(kernel, upstream):
