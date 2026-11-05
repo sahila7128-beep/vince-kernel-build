@@ -28,6 +28,12 @@ jobs:
             clang-14 llvm-14 lld-14 \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
+      - name: Expose LLVM 14 linker for kernel LTO
+        run: |
+          test -x /usr/bin/ld.lld-14
+          sudo ln -sf /usr/bin/ld.lld-14 /usr/local/bin/ld.lld
+          ld.lld --version
+
       - name: Validate scripts
         run: |
           bash -n scripts/build.sh
