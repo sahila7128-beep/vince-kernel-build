@@ -45,6 +45,39 @@ for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
  cp "$P/$f" "$K/$f"
 done
 python3 "$ROOT/scripts/vendor_fix.py" "$K" "$P/50_add_susfs_in_kernel-4.9.patch"
+
+# BakaSU/ReSukiSU static_export_check.mk requires these SELinux symbols
+# to have global linkage on old kernels. Never disable that build check.
+python3 - "$K" <<'PY'
+from pathlib import Path
+import sys
+k = Path(sys.argv[1])
+symbols = {
+    "security/selinux/selinuxfs.c": [
+        ("static ssize_t (*write_op[])", "ssize_t (*write_op[])"),
+        ("static const struct file_operations sel_handle_status_ops",
+         "const struct file_operations sel_handle_status_ops"),
+        ("static DEFINE_MUTEX(sel_mutex);", "DEFINE_MUTEX(sel_mutex);"),
+    ],
+    "security/selinux/ss/status.c": [
+        ("static struct page *selinux_status_page;", "struct page *selinux_status_page;"),
+        ("static DEFINE_MUTEX(selinux_status_lock);", "DEFINE_MUTEX(selinux_status_lock);"),
+    ],
+    "security/selinux/ss/services.c": [
+        ("static DEFINE_RWLOCK(policy_rwlock);", "DEFINE_RWLOCK(policy_rwlock);"),
+    ],
+}
+for name, replacements in symbols.items():
+    target = k / name
+    data = target.read_text()
+    for before, after in replacements:
+        count = data.count(before)
+        if count != 1:
+            raise SystemExit(f"Static export: {name} expected one {before!r}, got {count}")
+        data = data.replace(before, after, 1)
+    target.write_text(data)
+    print(f"[+] BakaSU SELinux symbol linkage corrected: {name}")
+PY
 grep -q 'SUSFS_VERSION "v2.3.0"' "$K/include/linux/susfs.h"
 
 # Preserve all original hardware settings and remove only stale KSU options.
