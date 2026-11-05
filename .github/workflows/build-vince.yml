@@ -31,8 +31,13 @@ jobs:
       - name: Expose LLVM 14 linker for kernel LTO
         run: |
           test -x /usr/bin/ld.lld-14
-          sudo ln -sf /usr/bin/ld.lld-14 /usr/local/bin/ld.lld
+          for bin in ld.lld llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-readelf llvm-ranlib; do
+            if [ -x "/usr/bin/$bin-14" ]; then
+              sudo ln -sf "/usr/bin/$bin-14" "/usr/local/bin/$bin"
+            fi
+          done
           ld.lld --version
+          llvm-ar --version | head -n1
 
       - name: Validate scripts
         run: |
