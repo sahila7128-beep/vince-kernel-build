@@ -1,0 +1,64 @@
+name: Build ZeroTwo BakaSU SUSFS 2.3.0 for vince
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/build-vince.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git make python3 zip unzip bc bison flex \
+            libssl-dev libelf-dev libncurses-dev cpio \
+            clang-14 llvm-14 lld-14 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Validate scripts
+        run: |
+          bash -n scripts/build.sh
+          python3 -m py_compile scripts/vendor_fix.py
+
+      - name: Build & package kernel (experimental)
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/build.sh 2>&1 | tee build.log
+
+      - name: Save build log even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-build-log
+          path: |
+            build.log
+            artifacts/MANIFEST.txt
+            artifacts/kernel-changes.txt
+          if-no-files-found: warn
+
+      - name: Upload candidate kernel ZIP on successful build only
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-BakaSU-SUSFS230-UNTESTED
+          path: |
+            artifacts/Image.gz-dtb
+            artifacts/ZeroTwo-BakaSU-SUSFS230-vince-UNTESTED.zip
+            artifacts/MANIFEST.txt
+            artifacts/kernel-sha256.txt
+            artifacts/zip-sha256.txt
+          if-no-files-found: error
