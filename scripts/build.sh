@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WORK="$ROOT/work"
+OUT="$ROOT/artifacts"
+mkdir -p "$WORK" "$OUT"
+trap 'echo "[FAILED] Inspect build log at line $LINENO" >&2' ERR
+
+# Pinned sources -- reproducible and no moving main branch.
+KERNEL=609a588f30d61a7f04e2061ab59c4f9c8c49aa6d
+BAKA=3380d41f2043644d0ef6c0e0e91be6b229024d00
+SUSFS=71345ded5af28f55d76ebcdc7a9df9cea56111e1
+ANYKERNEL=783f109bdbcacfea6e4c7bc232437afe796fae28
+
+get_source() {
+ local url="$1" dest="$2" sha="$3"
+ echo "[+] Fetch $url @ $sha"
+ git init -q "$dest"
+ git -C "$dest" remote add origin "$url"
+ git -C "$dest" fetch --depth=1 origin "$sha"
+ git -C "$dest" -c advice.detachedHead=false checkout --detach -q FETCH_HEAD
+ test "$(git -C "$dest" rev-parse HEAD)" = "$sha"
+}
+get_source https://github.com/rahmatsobrian/kernel_xiaomi_vince_4.9.337_zerotwo.git "$WORK/ZeroTwo" "$KERNEL"
+get_source https://github.com/Baka-SU/BakaSU.git "$WORK/BakaSU" "$BAKA"
+get_source https://github.com/wxx9248/susfs4ksu.git "$WORK/susfs4ksu" "$SUSFS"
+K="$WORK/ZeroTwo"
+P="$WORK/susfs4ksu/kernel_patches"
+
+# Use exactly one KernelSU implementation.
+test ! -e "$K/drivers/kernelsu"
+ln -s ../../BakaSU/kernel "$K/drivers/kernelsu"
+printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$K/drivers/Makefile"
+python3 - "$K/drivers/Kconfig" <<'PY'
+from pathlib import Path
+import sys
+f=Path(sys.argv[1]); s=f.read_text()
+anchor="\nendmenu\n"
+assert s.count(anchor)==1, "Unexpected drivers/Kconfig layout"
+f.write_text(s.replace(anchor, '\nsource "drivers/kernelsu/Kconfig"\n'+anchor))
+PY
+
+for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
+ test -s "$P/$f"
+ cp "$P/$f" "$K/$f"
+done
+python3 "$ROOT/scripts/vendor_fix.py" "$K" "$P/50_add_susfs_in_kernel-4.9.patch"
+grep -q 'SUSFS_VERSION "v2.3.0"' "$K/include/linux/susfs.h"
+
+# Preserve all original hardware settings and remove only stale KSU options.
+python3 - "$K/arch/arm64/configs/vince-perf_defconfig" <<'PY'
+from pathlib import Path
+import re,sys
+f=Path(sys.argv[1]); s=f.read_text()
+assert "CONFIG_THREAD_INFO_IN_TASK=y" in s
+s='\n'.join(l for l in s.splitlines()
+ if not re.match(r'^(?:# )?CONFIG_KSU(?:_[A-Z0-9_]+)?(?:=| is not set)',l))+'\n'
+s+="""
+# vince SUSFS 2.3.0 non-GKI inline hook
+CONFIG_KSU=y
+# CONFIG_KSU_TRACEPOINT_HOOK is not set
+# CONFIG_KSU_MANUAL_HOOK is not set
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_MAP=y
+"""
+f.write_text(s)
+PY
+
+cat > "$OUT/MANIFEST.txt" <<EOF
+DEVICE=vince
+BASE=ZeroTwo 4.9.337
+KERNEL_SOURCE_COMMIT=$KERNEL
+BAKASU_COMMIT=$BAKA
+SUSFS_4_9_PORT_COMMIT=$SUSFS
+ANYKERNEL_COMMIT=$ANYKERNEL
+SUSFS_VERSION=v2.3.0
+DEVICE_BOOT_TESTED=NO
+MODULE_INSTALL_TESTED=NO
+NOTE=EXPERIMENTAL_DO_NOT_FLASH_UNTIL_VALIDATED
+EOF
+
+cd "$K"
+git diff --stat > "$OUT/kernel-changes.txt"
+export ARCH=arm64
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+export CLANG_TRIPLE=aarch64-linux-gnu-
+export KBUILD_BUILD_USER=VinceBuilder
+export KBUILD_BUILD_HOST=GitHubActions
+make O=out ARCH=arm64 vince-perf_defconfig
+for sym in KSU KSU_SUSFS KSU_SUSFS_SUS_PATH KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SUS_MAP; do
+ grep -qx "CONFIG_$sym=y" out/.config || { echo "Missing CONFIG_$sym=y" >&2; exit 1; }
+done
+! grep -q '^CONFIG_KSU_MANUAL_HOOK=y' out/.config
+! grep -q '^CONFIG_KSU_TRACEPOINT_HOOK=y' out/.config
+
+echo "[+] Compiling kernel"
+make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
+ CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" Image.gz-dtb
+
+IMG="$K/out/arch/arm64/boot/Image.gz-dtb"
+test -s "$IMG"
+BYTES=$(stat -c %s "$IMG")
+(( BYTES > 1048576 && BYTES < 104857600 ))
+cp "$IMG" "$OUT/Image.gz-dtb"
+sha256sum "$IMG" > "$OUT/kernel-sha256.txt"
+
+get_source https://github.com/rahmatsobrian/AnyKernel3.git "$WORK/AnyKernel3" "$ANYKERNEL"
+AK="$WORK/AnyKernel3"
+grep -qx 'device.name1=vince' "$AK/anykernel.sh"
+grep -qx 'BLOCK=/dev/block/bootdevice/by-name/boot;' "$AK/anykernel.sh"
+find "$AK" -maxdepth 1 -type f -name 'Image*' -delete
+cp "$IMG" "$AK/Image.gz-dtb"
+cp "$OUT/MANIFEST.txt" "$AK/BUILD-MANIFEST.txt"
+ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-vince-UNTESTED.zip"
+(cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
+unzip -tq "$ZIP"
+unzip -Z1 "$ZIP" | grep -qx "Image.gz-dtb"
+unzip -Z1 "$ZIP" | grep -qx "anykernel.sh"
+sha256sum "$ZIP" > "$OUT/zip-sha256.txt"
+echo "[SUCCESS] Experimental kernel ZIP compiled; boot/device not tested."
