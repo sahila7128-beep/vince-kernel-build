@@ -168,4 +168,129 @@ replace("feature/uts_view.c", "#include <linux/sched/signal.h>",
     "#include <linux/sched.h>")
 print("[compat49] syscall forwarding is adjusted for 4.9; tracepoint dispatch itself still NOT validated.")
 
+
+# Linux 4.9 LSM uses struct list_head rather than hlist_head. Never patch
+# the head itself: only substitute an existing security_hook_list's func slot.
+# This retains list integrity and fails closed for empty heads.
+p=f/"hook/lsm_hook.c"
+code=p.read_text()
+target='''#else
+    heads_addr = find_kernel_symbol_exact("security_hook_heads");'''
+assert code.count(target)==1, "old LSM scan anchor changed"
+legacy=r'''#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    heads_addr = find_kernel_symbol_exact("security_hook_heads");
+    if (!heads_addr) {
+        pr_err("lsm_hook: security_hook_heads missing\n");
+        ret = -ENOENT;
+        goto out_unlock;
+    }
+    {
+        struct list_head *cursor;
+        struct list_head *end;
+        unsigned long heads_size = sizeof(struct security_hook_heads);
+        unsigned long index;
+        unsigned long count;
+
+        if (heads_size % sizeof(struct list_head)) {
+            ret = -EINVAL;
+            goto out_unlock;
+        }
+        count = heads_size / sizeof(struct list_head);
+        cursor = (struct list_head *)heads_addr;
+        end = cursor + count;
+        for (; cursor < end; cursor++) {
+            list_for_each_entry(entry, cursor, list) {
+                void **candidate = (void **)((char *)entry + hook->hook_offset);
+                void *origin = READ_ONCE(*candidate);
+                int j;
+                for (j = 0; j < ksu_lsm_hook_count; j++) {
+                    if (ksu_lsm_hook_entries[j].hook->replacement == origin) {
+                        origin = ksu_lsm_hook_entries[j].hook->original;
+                        break;
+                    }
+                }
+                if (origin == hook->replacement) {
+                    ret = -EALREADY;
+                    goto out_unlock;
+                }
+                if (origin == target) {
+                    selected_entry = entry;
+                    selected_slot = candidate;
+                    selected_origin = origin;
+                    break;
+                }
+            }
+            if (!selected_entry)
+                continue;
+            if (hook->offset) {
+                index = (unsigned long)(cursor - (struct list_head *)heads_addr);
+                if (hook->offset < 0 || (unsigned long)hook->offset >= count - index) {
+                    ret = -EINVAL;
+                    goto out_unlock;
+                }
+                cursor = (struct list_head *)heads_addr + index + hook->offset;
+                if (list_empty(cursor)) {
+                    pr_err("lsm_hook: empty legacy LSM head; refusing unsafe insertion\n");
+                    ret = -ENOENT;
+                    goto out_unlock;
+                }
+                entry = list_first_entry(cursor, struct security_hook_list, list);
+                selected_entry = entry;
+                selected_slot = (void **)((char *)entry + hook->hook_offset);
+                selected_origin = READ_ONCE(*selected_slot);
+            }
+            break;
+        }
+        if (!selected_entry) {
+            ret = -ENOENT;
+            goto out_unlock;
+        }
+        ret = ksu_lsm_hook_track(hook);
+        if (ret)
+            goto out_unlock;
+        ret = ksu_lsm_hook_patch_slot(selected_slot, hook->replacement);
+        if (ret) {
+            ksu_lsm_hook_untrack(hook);
+            goto out_unlock;
+        }
+        hook->entry = selected_entry;
+        hook->original = selected_origin;
+        pr_info("lsm_hook: 4.9 legacy list hook installed: %s\n",
+                hook->head_name ?: "unknown");
+    }
+#else
+    heads_addr = find_kernel_symbol_exact("security_hook_heads");'''
+code=code.replace(target,legacy,1)
+end_anchor='''#endif
+    goto out_unlock;
+out_untrack:'''
+assert code.count(end_anchor)==1,"LSM closing anchor changed"
+code=code.replace(end_anchor,'''#endif
+#endif
+    goto out_unlock;
+out_untrack:''',1)
+unhook_start='''    if (hook->entry == &hook->list) {
+        slot = (void **)&hook->list.head->first;'''
+assert code.count(unhook_start)==1,"LSM unhook branch changed"
+code=code.replace(unhook_start,'''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    /* Legacy mode never inserts a hook node into the LSM list. */
+    slot = (void **)((char *)hook->entry + hook->hook_offset);
+#else
+    if (hook->entry == &hook->list) {
+        slot = (void **)&hook->list.head->first;''',1)
+unhook_end='''        pr_info("unhook patch slot\n");
+    }
+#endif'''
+assert code.count(unhook_end)==1,"LSM unhook end changed"
+code=code.replace(unhook_end,'''        pr_info("unhook patch slot\n");
+    }
+#endif
+#endif''',1)
+p.write_text(code)
+print("[compat49] 4.9 legacy LSM list adapter, no dynamic head insertion")
+
+replace("hook/setuid_hook.c", "#include <linux/sched/signal.h>",
+        "#include <linux/sched.h>")
+
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
