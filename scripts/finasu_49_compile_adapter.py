@@ -57,6 +57,17 @@ for rel in ("feature/sucompat.c","hook/syscall_hook_manager.c"):
     replace(rel, "#include <linux/sched/task_stack.h>",
             "#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)\n#include <linux/sched/task_stack.h>\n#else\n#include <linux/sched.h>\n#endif")
 
+# All remaining linux/compiler_types.h includes in FinaSU v1.4.5.
+replace("sulog/event.h", "#include <linux/compiler_types.h>",
+        "#include <linux/compiler.h>")
+replace("policy/allowlist.c", "#include <linux/compiler_types.h>",
+        "#include <linux/compiler.h>")
+
+# Keep UTS ABI layout checks active with compiler-native C11 syntax.
+replace("feature/uts_view.c",
+        "static_assert(sizeof(struct ksu_uts_view_config)",
+        "_Static_assert(sizeof(struct ksu_uts_view_config)")
+
 # More old header mappings that CI exposed.
 replace("feature/sulog.c", "#include <linux/compiler_types.h>",
         "#include <linux/compiler.h>")
