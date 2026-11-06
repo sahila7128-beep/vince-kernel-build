@@ -809,18 +809,3 @@ static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
 
 replace("policy/app_profile.c", "#include <linux/sched/user.h>",
         "#include <linux/sched.h>")
-,s))
-    assert includes, f"{rel}: no include lines found"
-    offset=includes[-1].end()
-    s=s[:offset]+"\n"+helper+s[offset:]
-    import re
-    s=re.sub(r"\bkernel_write\(", "ksu_kernel_write_compat(", s)
-    s=re.sub(r"\bkernel_read\(", "ksu_kernel_read_compat(", s)
-    # Repair the wrapper's call, which must use old kernel_read.
-    s=s.replace("int ret = ksu_kernel_read_compat(fp, *pos, buf, len);",
-                "int ret = kernel_read(fp, *pos, buf, len);",1)
-    p.write_text(s)
-    print(f"[compat49] {rel}: preserve persistence offsets with 4.9 read/write ABI")
-
-replace("policy/app_profile.c", "#include <linux/sched/user.h>",
-        "#include <linux/sched.h>")
