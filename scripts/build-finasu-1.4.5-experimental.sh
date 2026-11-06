@@ -161,6 +161,7 @@ s='\n'.join(l for l in s.splitlines()
 s+="""
 # vince SUSFS 2.3.0 with FinaSU tracepoint compile experiment
 CONFIG_KPROBES=y
+CONFIG_DEBUG_KERNEL=y
 CONFIG_KALLSYMS_ALL=y
 CONFIG_KSU=y
 CONFIG_KSU_HOOK_TRACEPOINT=y
