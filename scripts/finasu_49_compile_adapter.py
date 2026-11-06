@@ -603,3 +603,53 @@ err_module:
 s=s[:start]+legacy+s[stop:]
 p.write_text(s)
 print("[compat49] private per-file anon inode with Linux 4.9 alloc_file ABI; runtime unvalidated")
+
+
+# ---------------------------------------------------------------------------
+# Linux 4.9 seccomp and mount namespace shims (CI 42309703536).
+# Linux 4.9's struct seccomp_filter has *no action cache*, so cache invalidation
+# is intentionally empty on this ABI; the actual seccomp BPF still evaluates.
+# ---------------------------------------------------------------------------
+p=f/"infra/seccomp_cache.c"
+s=p.read_text()
+s="#include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)\n" + """\
+#include <linux/types.h>
+#include <linux/seccomp.h>
+#include "infra/seccomp_cache.h"
+
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter; (void)nr; /* 4.9 has no cached seccomp allow decision */
+}
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter; (void)nr; /* 4.9 evaluates BPF at every decision */
+}
+#else
+""" + s + "\n#endif\n"
+p.write_text(s)
+print("[compat49] original 4.9 seccomp BPF has no action cache to invalidate")
+
+p=f/"infra/su_mount_ns.c"
+s=p.read_text()
+assert s.count("#include <uapi/linux/mount.h>")==1
+s=s.replace("#include <uapi/linux/mount.h>",
+    "#include <linux/mount.h>\n#include <linux/uaccess.h>",1)
+before="""    struct path root_path;
+    get_fs_root(current->fs, &root_path);
+    int pm_ret = path_mount(NULL, &root_path, NULL, MS_PRIVATE | MS_REC, NULL);
+    path_put(&root_path);"""
+assert s.count(before)==1
+after="""#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+    /* 4.9 has no path_mount(). Only the thread-local address limit is
+     * raised for the legacy mount syscall; restore it on every path. */
+    mm_segment_t old_fs = get_fs();
+    int pm_ret;
+    set_fs(KERNEL_DS);
+    pm_ret = ksyscall(mount, NULL, "/", NULL, MS_PRIVATE | MS_REC, NULL);
+    set_fs(old_fs);
+#else
+""" + before + "\n#endif"
+s=s.replace(before,after,1)
+p.write_text(s)
+print("[compat49] mount namespace: 4.9 mount syscall with restored address limit")
