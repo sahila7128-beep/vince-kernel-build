@@ -683,3 +683,66 @@ helper="""static void *ksu_49_kvmalloc_array(size_t n, size_t size, gfp_t flags)
 s=s.replace(anchor,helper+anchor,1)
 p.write_text(s)
 print("[compat49] symbol resolver: overflow-safe kmalloc/vmalloc fallback")
+
+
+# ---------------------------------------------------------------------------
+# pkg observer Linux 4.9 API: fsnotify.handle_event (9 arguments), mark group
+# supplied to fsnotify_add_mark, and bool task_work notification.
+# ---------------------------------------------------------------------------
+p=f/"manager/pkg_observer.c"
+s=p.read_text()
+assert s.count("task_work_add(current, cb, TWA_RESUME)")==1
+s=s.replace("task_work_add(current, cb, TWA_RESUME)",
+    "task_work_add(current, cb, true)",1)
+start=s.index("static int ksu_handle_inode_event(")
+stop=s.index("static int add_mark_on_inode(",start)
+modern=s[start:stop]
+legacy=r"""#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
+static void ksu_49_free_fsnotify_mark(struct fsnotify_mark *mark)
+{
+    kfree(mark);
+}
+
+static int ksu_handle_event_49(struct fsnotify_group *group,
+          struct inode *inode, struct fsnotify_mark *inode_mark,
+          struct fsnotify_mark *vfsmount_mark, u32 mask,
+          void *data, int data_type, const unsigned char *file_name,
+          u32 cookie)
+{
+    (void)group;
+    (void)inode;
+    (void)inode_mark;
+    (void)vfsmount_mark;
+    (void)data;
+    (void)data_type;
+    (void)cookie;
+    if (file_name && !(mask & FS_ISDIR) &&
+        !strcmp((const char *)file_name, "packages.list")) {
+        pr_info("packages.list detected: %d\n", mask);
+        ksu_defer_track_throne();
+    }
+    return 0;
+}
+
+static const struct fsnotify_ops ksu_ops = {
+    .handle_event = ksu_handle_event_49,
+};
+#else
+"""
+s=s[:start]+legacy+modern+"#endif\n\n"+s[stop:]
+assert s.count("    fsnotify_init_mark(m, g);")==1
+s=s.replace("    fsnotify_init_mark(m, g);",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
+    fsnotify_init_mark(m, ksu_49_free_fsnotify_mark);
+#else
+    fsnotify_init_mark(m, g);
+#endif""",1)
+assert s.count("    if (fsnotify_add_inode_mark(m, inode, 0)) {")==1
+s=s.replace("    if (fsnotify_add_inode_mark(m, inode, 0)) {",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 1, 0)
+    if (fsnotify_add_mark(m, g, inode, NULL, 0)) {
+#else
+    if (fsnotify_add_inode_mark(m, inode, 0)) {
+#endif""",1)
+p.write_text(s)
+print("[compat49] pkg observer: fsnotify backend, mark lifetime, task_work callback")
