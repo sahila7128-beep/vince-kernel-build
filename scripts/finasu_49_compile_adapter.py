@@ -782,7 +782,12 @@ static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
         *pos += ret;
     return ret;
 }
-#define ksu_kernel_write_compat __kernel_write
+static ssize_t ksu_kernel_write_49(struct file *fp, const void *buf,
+                                  size_t len, loff_t *pos)
+{
+    return __kernel_write(fp, (const char *)buf, len, pos);
+}
+#define ksu_kernel_write_compat ksu_kernel_write_49
 #define ksu_kernel_read_compat ksu_kernel_read_49
 #else
 #define ksu_kernel_write_compat kernel_write
@@ -809,3 +814,12 @@ static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
 
 replace("policy/app_profile.c", "#include <linux/sched/user.h>",
         "#include <linux/sched.h>")
+
+
+# filter_count was added to seccomp after the 4.9 representation.
+# Keep filter release semantics on 4.9 while avoiding nonexistent member.
+replace("policy/app_profile.c",
+        "    atomic_set(&current->seccomp.filter_count, 0);",
+        """#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+    atomic_set(&current->seccomp.filter_count, 0);
+#endif""")
