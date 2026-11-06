@@ -354,4 +354,118 @@ static long __nocfi ksu_syscall_dispatcher(const struct pt_regs *regs)
 // Register a handler into the dispatcher's routing table.''')
 print("[compat49] arm64 syscall dispatcher now uses six-direct-arg Linux 4.9 ABI")
 
+
+# Legacy arm64 page table walker: pre-4.14 does not have p4d. Use the
+# existing pgd->pud->pmd->pte walk and explicitly handle section mappings.
+p=f/"hook/arm64/patch_memory.c"
+src=p.read_text()
+assert src.count('#include "asm/cacheflush.h"')==1
+src=src.replace('#include "asm/cacheflush.h"',
+                '#include "asm/cacheflush.h"\n#include <linux/version.h>',1)
+assert src.count('    p4d_t *p4d;')==1
+src=src.replace('    p4d_t *p4d;',
+    '#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)\n    p4d_t *p4d;\n#endif',1)
+a=src.index("    p4d = p4d_offset(pgd, addr);")
+b=src.index("    if (pud_none(*pud) || pud_bad(*pud))",a)
+src=src[:a] + (
+    '#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)\n'
+    '    pud = pud_offset(pgd, addr);\n'
+    '#else\n' + src[a:b] + '#endif\n'
+) + src[b:]
+old='''    if (pud_none(*pud) || pud_bad(*pud))
+        goto fail;'''
+new='''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    if (pud_none(*pud))
+        goto fail;
+    if (pud_sect(*pud))
+        return ((phys_addr_t)pud_pfn(*pud) << PAGE_SHIFT) + (addr & ~PUD_MASK);
+    if (pud_bad(*pud))
+        goto fail;
+#else
+    if (pud_none(*pud) || pud_bad(*pud))
+        goto fail;
+#endif'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+old='''    if (pmd_none(*pmd) || pmd_bad(*pmd))
+        goto fail;'''
+new='''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    if (pmd_sect(*pmd))
+        return ((phys_addr_t)pmd_pfn(*pmd) << PAGE_SHIFT) + (addr & ~PMD_MASK);
+#endif
+    if (pmd_none(*pmd) || pmd_bad(*pmd))
+        goto fail;'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+old='''    return __pte_to_phys(*pte) + ((addr & ~PAGE_MASK));'''
+new='''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    return ((phys_addr_t)pte_pfn(*pte) << PAGE_SHIFT) + (addr & ~PAGE_MASK);
+#else
+    return __pte_to_phys(*pte) + (addr & ~PAGE_MASK);
+#endif'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+old='''#define ksu_flush_icache(start, end) __flush_icache_range(start, end)'''
+new='''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#define ksu_flush_icache(start, end) flush_icache_range(start, end)
+#else
+#define ksu_flush_icache(start, end) __flush_icache_range(start, end)
+#endif'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+old='''    ret = (int)copy_to_kernel_nofault(map, src, len);'''
+new='''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    ret = (int)probe_kernel_write(map, src, len);
+#else
+    ret = (int)copy_to_kernel_nofault(map, src, len);
+#endif'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+p.write_text(src)
+print("[compat49] old arm64 pgtable and text poke APIs; hardware runtime NOT tested")
+
+# The Vivo init_module/finit_module filter also directly hooks the native
+# syscall table; old 4.9 needs the 6-direct-register-argument convention.
+p=f/"hook/init_module_filter.c"
+src=p.read_text()
+old='''static long (*orig_init_module)(const struct pt_regs *regs);
+static long (*orig_finit_module)(const struct pt_regs *regs);'''
+new='''#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+static syscall_fn_t orig_init_module;
+static syscall_fn_t orig_finit_module;
+#else
+static long (*orig_init_module)(const struct pt_regs *regs);
+static long (*orig_finit_module)(const struct pt_regs *regs);
+#endif'''
+assert src.count(old)==1
+src=src.replace(old,new,1)
+start=src.index("static long filter_init_module(const struct pt_regs *regs)")
+end=src.index("void __init ksu_init_module_filter_init(void)",start)
+legacy=r'''#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#define KSU_49_MODULE_FILTER(name, matcher, original) \
+    static long name(unsigned long a0, unsigned long a1, \
+                     unsigned long a2, unsigned long a3, \
+                     unsigned long a4, unsigned long a5) \
+    { \
+        struct pt_regs regs = { 0 }; \
+        regs.regs[0] = a0; regs.regs[1] = a1; \
+        regs.regs[2] = a2; regs.regs[3] = a3; \
+        regs.regs[4] = a4; regs.regs[5] = a5; \
+        if (capable(CAP_SYS_MODULE) && matcher(&regs)) { \
+            pr_info("init_module_filter: acknowledged compatible target module\n"); \
+            return 0; \
+        } \
+        return original(a0, a1, a2, a3, a4, a5); \
+    }
+KSU_49_MODULE_FILTER(filter_init_module, init_module_matches, orig_init_module)
+KSU_49_MODULE_FILTER(filter_finit_module, finit_module_matches, orig_finit_module)
+#undef KSU_49_MODULE_FILTER
+#else
+'''
+src=src[:start]+legacy+src[start:end]+'#endif\n\n'+src[end:]
+src=src.replace('#include <linux/version.h>', '#include <linux/version.h>',1)
+# FinaSU already includes linux/version.h in include/arch.h.
+p.write_text(src)
+print("[compat49] init_module syscall-filter original-call ABI matched to 4.9")
+
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
