@@ -473,3 +473,133 @@ p.write_text(src)
 print("[compat49] init_module syscall-filter original-call ABI matched to 4.9")
 
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
+
+
+# ---------------------------------------------------------------------------
+# FinaSU v1.4.5 Linux 4.9 infra adapters based on CI 42258307048.
+# No globally permissive SELinux rules and no silent feature removal.
+# ---------------------------------------------------------------------------
+replace("infra/event_queue.h",
+        "#include <linux/fs.h>",
+        "#include <linux/fs.h>\n#include <linux/version.h>\n"
+        "#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)\n"
+        "typedef unsigned int __poll_t;\n#endif")
+p = f/"infra/event_queue.c"
+s = p.read_text()
+assert s.count("EPOLLHUP | POLLHUP") == 3
+assert s.count("EPOLLIN | EPOLLRDNORM") == 2
+s = s.replace("EPOLLHUP | POLLHUP", "POLLHUP")
+s = s.replace("EPOLLIN | EPOLLRDNORM", "POLLIN | POLLRDNORM")
+assert s.count("struct_size(node, payload, len)") == 1
+s = s.replace("struct_size(node, payload, len)", "sizeof(*node) + len")
+p.write_text(s)
+print("[compat49] event queue: legacy poll mask/type and allocation")
+
+p = f/"infra/file_wrapper.c"
+s = p.read_text()
+def fw_once(old, new):
+    global s
+    assert s.count(old)==1, f"file_wrapper: unexpected anchor count: {old[:85]!r}"
+    s = s.replace(old, new, 1)
+
+fw_once("#include <linux/mount.h>", "#include <linux/mount.h>\n#include <linux/module.h>")
+fw_once("static __poll_t ksu_wrapper_poll", "static unsigned int ksu_wrapper_poll")
+
+# iopoll is absent on Linux 4.9, so its wrapper must not be assigned.
+start = s.index("#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)\nstatic int ksu_wrapper_iopoll")
+stop  = s.index("#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)\nstatic int ksu_wrapper_iterate",start)
+s=s[:start]+"#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)\n"+s[start:stop]+"#endif\n\n"+s[stop:]
+fw_once("    p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;",
+    "#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)\n"
+    "    p->ops.iopoll = fp->f_op->iopoll ? ksu_wrapper_iopoll : NULL;\n#endif")
+
+fw_once("#else\n    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;\n#endif",
+    "#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)\n"
+    "    p->ops.mmap_supported_flags = fp->f_op->mmap_supported_flags;\n#endif")
+
+# Only dispatch methods that exist in the 4.9 file_operations ABI.
+start = s.index("static loff_t ksu_wrapper_remap_file_range")
+stop = s.index("static void ksu_release_file_wrapper", start)
+s=s[:start] + "#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)\n" + s[start:stop] + "#endif\n\n" + s[stop:]
+fw_once("    p->ops.remap_file_range = fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL;\n    p->ops.fadvise = fp->f_op->fadvise ? ksu_wrapper_fadvise : NULL;",
+    "#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)\n"
+    "    p->ops.remap_file_range = fp->f_op->remap_file_range ? ksu_wrapper_remap_file_range : NULL;\n"
+    "    p->ops.fadvise = fp->f_op->fadvise ? ksu_wrapper_fadvise : NULL;\n#endif")
+
+# Linux 4.9 lacks alloc_file_pseudo and inode_init_security_anon.
+# Backport a PER-FD inode using 4.9's own anon_inode_getfile primitives.
+# Never use anon_inode_getfile() directly: it shares a global inode and
+# re-labeling that would change SELinux metadata for unrelated descriptors.
+start = s.index("static struct inode *ksu_anon_inode_make_secure_inode")
+stop = s.index("\n#endif\n\nint ksu_install_file_wrapper",start)
+legacy = r"""
+static struct file *ksu_anon_inode_create_getfile_compat(const char *name,
+      const struct file_operations *fops, void *priv, int flags,
+      const struct inode *context_inode)
+{
+    struct inode *inode;
+    struct dentry *dentry;
+    struct path path;
+    struct file *file;
+    struct qstr qname;
+    struct inode_security_struct *isec;
+
+    (void)context_inode;
+    if (unlikely(!anon_inode_mnt))
+        return ERR_PTR(-ENODEV);
+    if (fops->owner && !try_module_get(fops->owner))
+        return ERR_PTR(-ENOENT);
+
+    inode = alloc_anon_inode(anon_inode_mnt->mnt_sb);
+    if (IS_ERR(inode)) {
+        file = ERR_CAST(inode);
+        goto err_module;
+    }
+
+    inode->i_flags &= ~S_PRIVATE;
+    /* Label the unique inode before publishing it via fd_install(). */
+    isec = ksu_selinux_inode(inode);
+    if (IS_ERR(isec)) {
+        file = ERR_CAST(isec);
+        goto err_inode;
+    }
+    if (!isec) {
+        file = ERR_PTR(-EACCES);
+        goto err_inode;
+    }
+    isec->sid = ksu_file_sid;
+
+    qname.name = name;
+    qname.len = strlen(name);
+    qname.hash = 0;
+    dentry = d_alloc_pseudo(anon_inode_mnt->mnt_sb, &qname);
+    if (!dentry) {
+        file = ERR_PTR(-ENOMEM);
+        goto err_inode;
+    }
+
+    path.dentry = dentry;
+    path.mnt = mntget(anon_inode_mnt);
+    d_instantiate(dentry, inode);
+    file = alloc_file(&path, OPEN_FMODE(flags), fops);
+    if (IS_ERR(file))
+        goto err_path;
+
+    file->f_mapping = inode->i_mapping;
+    file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
+    file->private_data = priv;
+    return file;
+
+err_path:
+    path_put(&path);
+    goto err_module;
+err_inode:
+    iput(inode);
+err_module:
+    module_put(fops->owner);
+    return file;
+}
+"""
+s=s[:start]+legacy+s[stop:]
+p.write_text(s)
+print("[compat49] private per-file anon inode with Linux 4.9 alloc_file ABI; runtime unvalidated")
