@@ -7,7 +7,7 @@ on:
       - "scripts/build-finasu-1.4.5-experimental.sh"
       - "scripts/finasu_49_compile_adapter.py"
       - "scripts/vendor_fix.py"
-      - ".github/workflows/build-vince.yml"
+      - ".github/workflows/build-finasu-vince.yml"
   workflow_dispatch:
 
 permissions:
@@ -66,14 +66,12 @@ jobs:
             artifacts/kernel-changes.txt
           if-no-files-found: warn
 
-      - name: Upload candidate kernel ZIP on successful build only
+      - name: Upload compile-only metadata (no flashable artifact)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: vince-FinaSU145-SUSFS230-UNTESTED
+          name: vince-FinaSU145-COMPILE-ONLY-NOFLASH
           path: |
-            artifacts/Image.gz-dtb
-            artifacts/ZeroTwo-FinaSU145-SUSFS230-NoMount22-vince-UNTESTED.zip
             artifacts/MANIFEST.txt
             artifacts/kernel-sha256.txt
             artifacts/zip-sha256.txt
