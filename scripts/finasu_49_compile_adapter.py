@@ -310,6 +310,10 @@ replace("feature/selinux_hide.c", "#include <linux/sched/task.h>",
         "#include <linux/sched.h>")
 
 
+# Kernel 4.9 ARM64 header does not transitively include version macros.
+replace("hook/syscall_hook.h", "#include <asm/syscall.h>",
+        "#include <asm/syscall.h>\n#include <linux/version.h>")
+
 # Critical runtime ABI correction: Linux 4.9 ARM64 loads syscall handlers
 # from sys_call_table with six direct arguments, not struct pt_regs *.
 # The dispatcher must obtain pt_regs from current's syscall stack.
