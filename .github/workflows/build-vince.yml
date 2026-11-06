@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "scripts/**"
+      - "scripts/build.sh"
+      - "scripts/vendor_fix.py"
       - ".github/workflows/build-vince.yml"
   workflow_dispatch:
 
