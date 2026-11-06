@@ -236,28 +236,32 @@ path=Path(sys.argv[1]); content=path.read_text()
 anchor="write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk\n"
 assert content.count("\n"+anchor)==1, "unexpected AnyKernel boot install stanza"
 verify='''
-# Read-back verification. This checks the on-device boot partition and aborts
-# if the written bytes differ from the newly packed boot image.
-ui_print "Verifying new boot image was written to $BLOCK...";
-if [ ! -s "$SPLITIMG/boot-new.img" ]; then
-  abort "Missing boot-new.img; installation is NOT confirmed.";
+# InstallerFIX2: AnyKernel3 creates boot-new.img under $AKHOME,
+# not $SPLITIMG. Verify the written image-sized prefix of the partition.
+ui_print "Verifying boot partition write on $BLOCK...";
+if [ ! -s "$AKHOME/boot-new.img" ]; then
+  abort "AnyKernel output missing: $AKHOME/boot-new.img; boot write NOT confirmed.";
 fi;
 if [ ! -b "$BLOCK" ]; then
-  abort "Target is not a block device; installation NOT confirmed.";
+  abort "Boot device not accessible as block device; write NOT confirmed.";
 fi;
-verify_size=$(wc -c < "$SPLITIMG/boot-new.img");
+verify_size=$(wc -c < "$AKHOME/boot-new.img");
+if [ "$verify_size" -lt 1048576 ]; then
+  abort "Unexpectedly small repacked boot image. Installation NOT confirmed.";
+fi;
 verify_blocks=$(( (verify_size + 4095) / 4096 ));
-verify_expected=$(sha256sum "$SPLITIMG/boot-new.img" | cut -d' ' -f1);
+verify_expected=$(sha256sum "$AKHOME/boot-new.img" | cut -d' ' -f1);
+sync;
 verify_actual=$(dd if="$BLOCK" bs=4096 count="$verify_blocks" 2>/dev/null | head -c "$verify_size" | sha256sum | cut -d' ' -f1);
 if [ -z "$verify_actual" ] || [ "$verify_expected" != "$verify_actual" ]; then
-  abort "BOOT READBACK MISMATCH. Do not reboot until boot.img is restored/checked.";
+  abort "BOOT READBACK MISMATCH: partition does not match image. Restore boot backup before reboot.";
 fi;
-ui_print "PASS: boot partition matches new boot image (SHA256).";
+ui_print "PASS: written boot image matches (SHA-256).";
 '''
 path.write_text(content.replace(anchor,anchor+verify+"\n",1))
 PY
-printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256\n' >> "$AK/BUILD-MANIFEST.txt"
-ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-VerifiedInstaller-vince-UNTESTED.zip"
+printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256_ACTUAL_AKHOME_PATH\nINSTALLER_FIXED_VERSION=2\n' >> "$AK/BUILD-MANIFEST.txt"
+ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-InstallerFIX2-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
 unzip -Z1 "$ZIP" | grep -qx "Image.gz-dtb"
