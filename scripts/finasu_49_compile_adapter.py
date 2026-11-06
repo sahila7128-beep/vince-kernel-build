@@ -955,3 +955,52 @@ s=s.replace("    return selinux_inode(inode);",
 s=s.replace('#include <linux/fs.h>', '#include <linux/fs.h>\n#include <linux/version.h>',1)
 p.write_text(s)
 print("[compat49] SELinux inode: 4.9 i_security with back-pointer validation")
+
+
+# ---------------------------------------------------------------------------
+# SELinux 4.9: task security is a direct cred->security pointer, and the
+# enforcing/enable state is exported via legacy globals. Keep real state;
+# never hard-code "enforcing" or forge detector output.
+# ---------------------------------------------------------------------------
+p=f/"selinux/selinux.c"
+s=p.read_text()
+assert s.count('#include "selinux.h"')==1
+s=s.replace('#include "selinux.h"',
+            '#include "selinux.h"\n#include <linux/security.h>\n#include <linux/selinux.h>',1)
+assert s.count("    tsec = selinux_cred(cred);")==1
+anchor="static u32 cached_su_sid __read_mostly = 0;"
+assert s.count(anchor)==1
+shim=r"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#define selinux_cred(cred) \
+    ((struct task_security_struct *)((cred)->security))
+#ifdef CONFIG_SECURITY_SELINUX_DEVELOP
+extern int selinux_enforcing;
+#endif
+#endif
+
+"""
+s=s.replace(anchor,shim+anchor,1)
+assert s.count("    selinux_state.enforcing = enforce;")==1
+s=s.replace("    selinux_state.enforcing = enforce;",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    WRITE_ONCE(selinux_enforcing, enforce ? 1 : 0);
+#else
+    selinux_state.enforcing = enforce;
+#endif""",1)
+assert s.count("    if (selinux_state.disabled) {")==1
+s=s.replace("    if (selinux_state.disabled) {",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    if (!selinux_is_enabled()) {
+#else
+    if (selinux_state.disabled) {
+#endif""",1)
+assert s.count("    return selinux_state.enforcing;")==1
+s=s.replace("    return selinux_state.enforcing;",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    return READ_ONCE(selinux_enforcing) != 0;
+#else
+    return selinux_state.enforcing;
+#endif""",1)
+p.write_text(s)
+print("[compat49] SELinux task SID/access and actual enforcing flag use native 4.9 APIs")
+
