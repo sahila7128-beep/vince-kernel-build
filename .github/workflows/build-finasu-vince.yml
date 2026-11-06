@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "scripts/**"
+      - "scripts/build-finasu-1.4.5-experimental.sh"
+      - "scripts/finasu_49_compile_adapter.py"
+      - "scripts/vendor_fix.py"
       - ".github/workflows/build-vince.yml"
   workflow_dispatch:
 
@@ -45,6 +47,7 @@ jobs:
         run: |
           bash -n scripts/build-finasu-1.4.5-experimental.sh
           python3 -m py_compile scripts/vendor_fix.py
+          python3 -m py_compile scripts/finasu_49_compile_adapter.py
 
       - name: Build & package kernel (experimental)
         shell: bash
