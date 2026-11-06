@@ -44,6 +44,10 @@ replace("core/init.c",
         "#else\nMODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);\n#endif",
         "#elif LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)\nMODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);\n#endif")
 
+# Kernel 4.9 printk ratelimit macros require an explicit dependency.
+replace("feature/kernel_umount.c", "#include <linux/printk.h>",
+        "#include <linux/printk.h>\n#include <linux/ratelimit.h>")
+
 # Legacy 4.9 headers. These replacements change includes only.
 replace("feature/sucompat.c", "#include <linux/compiler_types.h>",
         "#include <linux/compiler.h>")
