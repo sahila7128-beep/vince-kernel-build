@@ -48,6 +48,43 @@ for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
 done
 python3 "$ROOT/scripts/vendor_fix.py" "$K" "$P/50_add_susfs_in_kernel-4.9.patch"
 
+# Android 13 SELinux Netlink permission backport for ZeroTwo 4.9.
+# The base kernel only exposes nlmsg_read/write for netlink_route_socket,
+# while the installed Android 13 ROM declares nlmsg_readpriv/getneigh.
+# Without these kernel mappings RTM_GETLINK and RTM_GETNEIGH both use the
+# overly broad netdomain:nlmsg_read rule, exposing Wi-Fi MAC and ARP peers.
+# Match Android common SELinux behavior; do not add any permissive allow rules.
+python3 - "$K" <<'PY'
+from pathlib import Path
+import re,sys
+k=Path(sys.argv[1])
+c=k/"security/selinux/include/classmap.h"
+s=c.read_text()
+old='''\t{ "netlink_route_socket",
+\t  { COMMON_SOCK_PERMS,
+\t    "nlmsg_read", "nlmsg_write", NULL } },'''
+new='''\t{ "netlink_route_socket",
+\t  { COMMON_SOCK_PERMS,
+\t    "nlmsg_read", "nlmsg_write", "nlmsg_readpriv",
+\t    "nlmsg_getneigh", NULL } },'''
+assert s.count(old)==1, "SELinux classmap route socket unexpected"
+c.write_text(s.replace(old,new,1))
+
+f=k/"security/selinux/nlmsgtab.c"
+s=f.read_text()
+for typ,permission in [
+    ("RTM_GETLINK","NETLINK_ROUTE_SOCKET__NLMSG_READPRIV"),
+    ("RTM_GETNEIGH","NETLINK_ROUTE_SOCKET__NLMSG_GETNEIGH"),
+    ("RTM_GETNEIGHTBL","NETLINK_ROUTE_SOCKET__NLMSG_GETNEIGH"),
+]:
+    rx=r"(^[ \t]*\{[ \t]*"+typ+r",[ \t]*)NETLINK_ROUTE_SOCKET__NLMSG_READ([ \t]*\},)"
+    s,n=re.subn(rx,lambda m:m.group(1)+permission+m.group(2),s,flags=re.M)
+    assert n==1,f"Expected exactly one stock mapping for {typ}, got {n}"
+f.write_text(s)
+print("[+] SELinux Netlink: GETLINK->READPRIV, GETNEIGH/GETNEIGHTBL->GETNEIGH")
+PY
+
+
 # BakaSU/ReSukiSU static_export_check.mk requires these SELinux symbols
 # to have global linkage on old kernels. Never disable that build check.
 python3 - "$K" <<'PY'
@@ -149,6 +186,8 @@ SUSFS_4_9_PORT_COMMIT=$SUSFS
 ANYKERNEL_COMMIT=$ANYKERNEL
 NOMOUNT_COMMIT=$NOMOUNT
 NOMOUNT_KERNEL_API=22
+SELINUX_NETLINK_HARDENING=READPRIV_GETNEIGH_ANDROID13
+ROM_ADBROOT_POLICY_CHANGED=NO
 SUSFS_VERSION=v2.3.0
 DEVICE_BOOT_TESTED=NO
 MODULE_INSTALL_TESTED=NO
@@ -188,7 +227,7 @@ grep -qx 'BLOCK=/dev/block/bootdevice/by-name/boot;' "$AK/anykernel.sh"
 find "$AK" -maxdepth 1 -type f -name 'Image*' -delete
 cp "$IMG" "$AK/Image.gz-dtb"
 cp "$OUT/MANIFEST.txt" "$AK/BUILD-MANIFEST.txt"
-ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-vince-UNTESTED.zip"
+ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
 unzip -Z1 "$ZIP" | grep -qx "Image.gz-dtb"
