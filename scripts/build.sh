@@ -227,7 +227,37 @@ grep -qx 'BLOCK=/dev/block/bootdevice/by-name/boot;' "$AK/anykernel.sh"
 find "$AK" -maxdepth 1 -type f -name 'Image*' -delete
 cp "$IMG" "$AK/Image.gz-dtb"
 cp "$OUT/MANIFEST.txt" "$AK/BUILD-MANIFEST.txt"
-ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-vince-UNTESTED.zip"
+# Verify installation success on real boot partition rather than trusting
+# legacy AnyKernel's write status (it may swallow write errors).
+python3 - "$AK/anykernel.sh" <<'PY'
+from pathlib import Path
+import sys
+path=Path(sys.argv[1]); content=path.read_text()
+anchor="write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk\n"
+assert content.count("\n"+anchor)==1, "unexpected AnyKernel boot install stanza"
+verify='''
+# Read-back verification. This checks the on-device boot partition and aborts
+# if the written bytes differ from the newly packed boot image.
+ui_print "Verifying new boot image was written to $BLOCK...";
+if [ ! -s "$SPLITIMG/boot-new.img" ]; then
+  abort "Missing boot-new.img; installation is NOT confirmed.";
+fi;
+if [ ! -b "$BLOCK" ]; then
+  abort "Target is not a block device; installation NOT confirmed.";
+fi;
+verify_size=$(wc -c < "$SPLITIMG/boot-new.img");
+verify_blocks=$(( (verify_size + 4095) / 4096 ));
+verify_expected=$(sha256sum "$SPLITIMG/boot-new.img" | cut -d' ' -f1);
+verify_actual=$(dd if="$BLOCK" bs=4096 count="$verify_blocks" 2>/dev/null | head -c "$verify_size" | sha256sum | cut -d' ' -f1);
+if [ -z "$verify_actual" ] || [ "$verify_expected" != "$verify_actual" ]; then
+  abort "BOOT READBACK MISMATCH. Do not reboot until boot.img is restored/checked.";
+fi;
+ui_print "PASS: boot partition matches new boot image (SHA256).";
+'''
+path.write_text(content.replace(anchor,anchor+verify+"\n",1))
+PY
+printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256\n' >> "$AK/BUILD-MANIFEST.txt"
+ZIP="$OUT/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-VerifiedInstaller-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
 unzip -Z1 "$ZIP" | grep -qx "Image.gz-dtb"
