@@ -57,4 +57,44 @@ for rel in ("feature/sucompat.c","hook/syscall_hook_manager.c"):
     replace(rel, "#include <linux/sched/task_stack.h>",
             "#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)\n#include <linux/sched/task_stack.h>\n#else\n#include <linux/sched.h>\n#endif")
 
+# More old header mappings that CI exposed.
+replace("feature/sulog.c", "#include <linux/compiler_types.h>",
+        "#include <linux/compiler.h>")
+
+# Preserve compile-time ABI size assertions (use C11 spelling on 4.9).
+p = f/"feature/netisolate.c"
+src = p.read_text()
+import re
+src,n=re.subn(r"(?m)^static_assert\(", "_Static_assert(", src)
+if n!=4:
+    raise SystemExit(f"Expected 4 netisolate size assertions, found {n}")
+src=src.replace('#include <linux/types.h>', '#include <linux/types.h>\n#include <linux/version.h>',1)
+start=src.index("#define NI_WRAPPER(name, op, compat)")
+stop=src.index("\nNI_WRAPPER(ni_connect, NI_CONNECT, false)",start)
+existing=src[start:stop]
+legacy="""#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+/* On 4.9 arm64 sys_call_table takes original x0-x5 argument registers,
+ * never a struct pt_regs * like newer syscall wrappers. */
+#define NI_WRAPPER(name, op, compat) \\
+    static long __nocfi name(unsigned long a0, unsigned long a1, \\
+                            unsigned long a2, unsigned long a3, \\
+                            unsigned long a4, unsigned long a5) \\
+    { \\
+        struct pt_regs reg_copy = { 0 }; \\
+        struct ni_endpoint endpoint; \\
+        reg_copy.regs[0] = a0; reg_copy.regs[1] = a1; \\
+        reg_copy.regs[2] = a2; reg_copy.regs[3] = a3; \\
+        reg_copy.regs[4] = a4; reg_copy.regs[5] = a5; \\
+        if (ni_should_refuse(&reg_copy, op, compat, &endpoint)) { \\
+            ni_record_event(current_uid().val, op, &endpoint); \\
+            return op == NI_SOCKET ? -EACCES : -ECONNREFUSED; \\
+        } \\
+        return ni_original(op, compat)(a0, a1, a2, a3, a4, a5); \\
+    }
+#else
+"""
+src=src[:start]+legacy+existing+"\n#endif\n"+src[stop:]
+p.write_text(src)
+print("[compat49] netisolate ABI wrappers and size assertions adapted; runtime still UNTESTED")
+
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
