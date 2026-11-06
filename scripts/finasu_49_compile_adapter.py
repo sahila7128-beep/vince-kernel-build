@@ -653,3 +653,33 @@ after="""#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 s=s.replace(before,after,1)
 p.write_text(s)
 print("[compat49] mount namespace: 4.9 mount syscall with restored address limit")
+
+
+# 4.9 has kvfree() and vmalloc(), but not kvmalloc_array().
+# Keep the original grow-to-vmalloc behavior instead of limiting allocations
+# to physically contiguous kmalloc pages.
+p=f/"infra/symbol_resolver.c"
+s=p.read_text()
+assert s.count("#include <linux/mm.h>")==1
+s=s.replace("#include <linux/mm.h>",
+    "#include <linux/mm.h>\n#include <linux/vmalloc.h>",1)
+needle="    ctx->entries = kvmalloc_array(count, sizeof(*ctx->entries), GFP_KERNEL);"
+assert s.count(needle)==1
+s=s.replace(needle,"    ctx->entries = ksu_49_kvmalloc_array(count, sizeof(*ctx->entries), GFP_KERNEL);",1)
+anchor="struct ksu_batch_entry {"
+assert s.count(anchor)==1
+helper="""static void *ksu_49_kvmalloc_array(size_t n, size_t size, gfp_t flags)
+{
+    void *ptr;
+    if (size && n > ((size_t)-1) / size)
+        return NULL;
+    ptr = kmalloc_array(n, size, flags);
+    if (ptr || !n || !size)
+        return ptr;
+    return vmalloc(n * size);
+}
+
+"""
+s=s.replace(anchor,helper+anchor,1)
+p.write_text(s)
+print("[compat49] symbol resolver: overflow-safe kmalloc/vmalloc fallback")
