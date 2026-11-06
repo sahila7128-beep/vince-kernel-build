@@ -108,4 +108,64 @@ src=src[:start]+legacy+existing+"\n#endif\n"+src[stop:]
 p.write_text(src)
 print("[compat49] netisolate ABI wrappers and size assertions adapted; runtime still UNTESTED")
 
+
+# Linux 4.9 uses direct ARM64 x0-x5 arguments in the syscall table.
+# These helpers restore the correct original-syscall calling convention.
+replace("hook/syscall_hook.h",
+    "extern syscall_fn_t *ksu_syscall_table;",
+    """extern syscall_fn_t *ksu_syscall_table;
+#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+static inline long ksu_invoke_original(int nr, const struct pt_regs *r)
+{
+    return ksu_syscall_table[nr](r->regs[0], r->regs[1], r->regs[2],
+                                 r->regs[3], r->regs[4], r->regs[5]);
+}
+#else
+static inline long ksu_invoke_original(int nr, const struct pt_regs *r)
+{
+    return ksu_syscall_table[nr](r);
+}
+#endif""")
+for rel in ("feature/sucompat.c", "hook/syscall_event_bridge.c"):
+    p = f/rel
+    code = p.read_text()
+    n = code.count("ksu_syscall_table[orig_nr](regs)")
+    if n < 1:
+        raise SystemExit(f"Expected original syscall invocations in {rel}")
+    code = code.replace("ksu_syscall_table[orig_nr](regs)",
+                        "ksu_invoke_original(orig_nr, regs)")
+    if rel == "feature/sucompat.c":
+        assert code.count("ksu_syscall_table[__NR_execveat](regs)") == 1
+        code = code.replace("ksu_syscall_table[__NR_execveat](regs)",
+                            "ksu_invoke_original(__NR_execveat, regs)")
+    p.write_text(code)
+    print(f"[compat49] adapted {rel}: {n} syscall call sites")
+
+# Preserve "nofault" behavior by disabling user page faults around legacy
+# strncpy_from_user, rather than silently substituting faultable reads.
+p = f/"feature/sucompat.c"
+src = p.read_text()
+anchor49 = '#define SU_PATH "/system/bin/su"'
+assert src.count(anchor49)==1
+shim = """#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+static inline long ksu_strncpy_from_user_nofault_49(char *dst,
+    const char __user *src, long size)
+{
+    long ret;
+    pagefault_disable();
+    ret = strncpy_from_user(dst, src, size);
+    pagefault_enable();
+    return ret;
+}
+#define strncpy_from_user_nofault ksu_strncpy_from_user_nofault_49
+#endif
+
+"""
+src=src.replace(anchor49,shim+anchor49,1)
+p.write_text(src)
+
+replace("feature/uts_view.c", "#include <linux/sched/signal.h>",
+    "#include <linux/sched.h>")
+print("[compat49] syscall forwarding is adjusted for 4.9; tracepoint dispatch itself still NOT validated.")
+
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
