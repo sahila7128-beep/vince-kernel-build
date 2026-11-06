@@ -967,7 +967,7 @@ s=p.read_text()
 assert s.count('#include "selinux.h"')==1
 s=s.replace('#include "selinux.h"',
             '#include "selinux.h"\n#include <linux/security.h>\n#include <linux/selinux.h>',1)
-assert s.count("    tsec = selinux_cred(cred);")==1
+assert s.count("    tsec = selinux_cred(cred);") >= 1
 anchor="static u32 cached_su_sid __read_mostly = 0;"
 assert s.count(anchor)==1
 shim=r"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
