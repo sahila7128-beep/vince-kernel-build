@@ -49,6 +49,10 @@ for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
 done
 python3 "$ROOT/scripts/vendor_fix.py" "$K" "$P/50_add_susfs_in_kernel-4.9.patch"
 
+# Strict, version-pinned FinaSU compile compatibility adapters.
+# This is NOT proof of a safe 4.9 arm64 syscall ABI for runtime root.
+python3 "$ROOT/scripts/finasu_49_compile_adapter.py" "$K"
+
 # Android 13 SELinux Netlink permission backport for ZeroTwo 4.9.
 # The base kernel only exposes nlmsg_read/write for netlink_route_socket,
 # while the installed Android 13 ROM declares nlmsg_readpriv/getneigh.
@@ -215,6 +219,10 @@ for sym in KSU KSU_HOOK_TRACEPOINT KPROBES KALLSYMS_ALL KSU_SUSFS KSU_SUSFS_SUS_
 done
 ! grep -q '^CONFIG_KSU_HOOK_SUSFS_INLINE=y' out/.config
 # Inline backend requires Linux 4.9 SUSFS preinit hook sites not in port; do not bypass FinaSU checks.
+
+echo "[+] Preflight FinaSU kernel objects (faster diagnosis)"
+make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
+ CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" drivers/kernelsu/
 
 echo "[+] Compiling kernel"
 make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
