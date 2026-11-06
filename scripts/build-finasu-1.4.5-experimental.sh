@@ -192,6 +192,7 @@ KERNEL_SOURCE_COMMIT=$KERNEL
 FINASU_VERSION=v1.4.5
 FINASU_COMMIT=$FINA
 FINASU_BUILD_MODE=TRACEPOINT_EXPERIMENTAL_LINUX49
+FINASU_PREINIT_REQUIRED=YES
 SUSFS_4_9_PORT_COMMIT=$SUSFS
 ANYKERNEL_COMMIT=$ANYKERNEL
 NOMOUNT_COMMIT=$NOMOUNT
@@ -220,12 +221,21 @@ done
 ! grep -q '^CONFIG_KSU_HOOK_SUSFS_INLINE=y' out/.config
 # Inline backend requires Linux 4.9 SUSFS preinit hook sites not in port; do not bypass FinaSU checks.
 
+# FinaSU preinit is mandatory for its userspace startup and module handling.
+# The original compiler probe silently disabled it if UAPI headers were absent.
+echo "[+] Generate UAPI headers required for FinaSU preinit runner"
+make O=out ARCH=arm64 INSTALL_HDR_PATH="$K/out/usr" headers_install
+test -s "$K/out/usr/include/linux/unistd.h" || {
+ echo "FinaSU preinit prerequisite missing: out/usr/include/linux/unistd.h" >&2; exit 1;
+}
+
+
 echo "[+] Preflight FinaSU kernel objects (faster diagnosis)"
-make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
+make -j2 O=out ARCH=arm64 KSU_REQUIRE_PREINIT=1 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
  CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" drivers/kernelsu/
 
 echo "[+] Compiling kernel"
-make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
+make -j2 O=out ARCH=arm64 KSU_REQUIRE_PREINIT=1 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
  CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" Image.gz-dtb
 
 IMG="$K/out/arch/arm64/boot/Image.gz-dtb"
