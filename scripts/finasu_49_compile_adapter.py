@@ -279,11 +279,11 @@ code=code.replace(unhook_start,'''#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14,
 #else
     if (hook->entry == &hook->list) {
         slot = (void **)&hook->list.head->first;''',1)
-unhook_end='''        pr_info("unhook patch slot\n");
+unhook_end=r'''        pr_info("unhook patch slot\n");
     }
 #endif'''
 assert code.count(unhook_end)==1,"LSM unhook end changed"
-code=code.replace(unhook_end,'''        pr_info("unhook patch slot\n");
+code=code.replace(unhook_end,r'''        pr_info("unhook patch slot\n");
     }
 #endif
 #endif''',1)
