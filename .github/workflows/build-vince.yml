@@ -70,7 +70,7 @@ jobs:
           name: vince-BakaSU-SUSFS230-UNTESTED
           path: |
             artifacts/Image.gz-dtb
-            artifacts/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-vince-UNTESTED.zip
+            artifacts/ZeroTwo-BakaSU-SUSFS230-NoMount22-NetlinkFix-VerifiedInstaller-vince-UNTESTED.zip
             artifacts/MANIFEST.txt
             artifacts/kernel-sha256.txt
             artifacts/zip-sha256.txt
