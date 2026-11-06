@@ -790,8 +790,13 @@ static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
 #endif
 
 """
-    # These two translation units already include linux/version.h.
-    s=helper+s
+    if "#include <linux/version.h>" not in s:
+        assert s.count("#include <linux/fs.h>") == 1
+        s=s.replace("#include <linux/fs.h>",
+                    "#include <linux/fs.h>\n#include <linux/version.h>",1)
+    anchor = '#include "infra/su_mount_ns.h"'
+    assert s.count(anchor) == 1
+    s=s.replace(anchor, anchor+"\n"+helper,1)
     import re
     s=re.sub(r"\bkernel_write\(", "ksu_kernel_write_compat(", s)
     s=re.sub(r"\bkernel_read\(", "ksu_kernel_read_compat(", s)
