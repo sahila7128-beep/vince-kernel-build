@@ -746,3 +746,19 @@ s=s.replace("    if (fsnotify_add_inode_mark(m, inode, 0)) {",
 #endif""",1)
 p.write_text(s)
 print("[compat49] pkg observer: fsnotify backend, mark lifetime, task_work callback")
+
+
+# Linux 4.9 task_work_add() uses bool notify; modern TWA_RESUME is absent.
+# Keep asynchronous persistence for the manager and allowlist.
+for rel in ("policy/allowlist.c", "manager/dynamic_manager.c"):
+    p = f/rel
+    s = p.read_text()
+    old = "task_work_add(tsk, cb, TWA_RESUME)"
+    assert s.count(old) == 1, f"{rel}: task_work call changed"
+    s = s.replace(old, "task_work_add(tsk, cb, true)", 1)
+    if rel == "policy/allowlist.c":
+        assert s.count("        fallthrough;") == 1
+        s = s.replace("        fallthrough;",
+                      "        __attribute__((fallthrough));", 1)
+    p.write_text(s)
+print("[compat49] manager/allowlist persistence and fallthrough on 4.9")
