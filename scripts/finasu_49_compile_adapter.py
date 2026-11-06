@@ -823,3 +823,135 @@ replace("policy/app_profile.c",
         """#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
     atomic_set(&current->seccomp.filter_count, 0);
 #endif""")
+
+
+# ---------------------------------------------------------------------------
+# FinaSU runtime legacy 4.9: nofault user access, module-rc allocation,
+# kernel_read ABI, and six-register read/fstat syscall handlers.
+# These correct actual call-site ABI errors rather than silencing warnings.
+# ---------------------------------------------------------------------------
+p=f/"runtime/ksud_integration.c"
+s=p.read_text()
+assert s.count("#include <linux/version.h>")==1
+s=s.replace("#include <linux/version.h>",
+            "#include <linux/version.h>\n#include <linux/vmalloc.h>",1)
+anchor="static bool check_argv(struct user_arg_ptr argv, int index, const char *expected, char *buf, size_t buf_len)"
+assert s.count(anchor)==1
+compat=r"""#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+/* ARM64 4.9 has no nofault uaccess helpers. Fail on bad userspace address;
+ * disable faults while copying so a fault never sleeps in this context. */
+static long ksu_49_strncpy_user_nofault(char *to,
+                                       const char __user *from, long n)
+{
+    long r;
+    if (!from || n <= 0 || !access_ok(VERIFY_READ, from, n))
+        return -EFAULT;
+    pagefault_disable();
+    r = strncpy_from_user(to, from, n);
+    pagefault_enable();
+    return r;
+}
+static unsigned long ksu_49_copy_user_from_nofault(
+    void *to, const void __user *from, unsigned long n)
+{
+    unsigned long left;
+    if (!access_ok(VERIFY_READ, from, n))
+        return n;
+    pagefault_disable();
+    left = __copy_from_user_inatomic(to, from, n);
+    pagefault_enable();
+    return left;
+}
+static unsigned long ksu_49_copy_user_to_nofault(
+    void __user *to, const void *from, unsigned long n)
+{
+    unsigned long left;
+    if (!access_ok(VERIFY_WRITE, to, n))
+        return n;
+    pagefault_disable();
+    left = __copy_to_user_inatomic(to, from, n);
+    pagefault_enable();
+    return left;
+}
+#define strncpy_from_user_nofault ksu_49_strncpy_user_nofault
+#define copy_from_user_nofault ksu_49_copy_user_from_nofault
+#define copy_to_user_nofault ksu_49_copy_user_to_nofault
+
+/* No kvmalloc in 4.9; preserve kmalloc + vmalloc allocation semantics. */
+static void *ksu_49_kvmalloc(size_t n)
+{
+    void *buf;
+    if (n > 8 * 1024 * 1024)
+        return NULL;
+    buf = kmalloc(n, GFP_KERNEL | __GFP_NOWARN);
+    if (!buf)
+        buf = vmalloc(n);
+    return buf;
+}
+#define kvmalloc(n, flags) ksu_49_kvmalloc(n)
+#endif
+
+"""
+s=s.replace(anchor,compat+anchor,1)
+assert s.count("    r = kernel_read(f, module_rc_buf, fsize, &pos);")==1
+s=s.replace("    r = kernel_read(f, module_rc_buf, fsize, &pos);",
+"""#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    r = kernel_read(f, pos, module_rc_buf, fsize);
+    if (r > 0)
+        pos += r;
+#else
+    r = kernel_read(f, module_rc_buf, fsize, &pos);
+#endif""",1)
+
+start=s.index("static long (*orig_sys_read)(const struct pt_regs *regs);")
+stop=s.index("static int input_handle_event_handler_pre(",start)
+modern=s[start:stop]
+legacy=modern
+for old,new in (
+    ("static long (*orig_sys_read)(const struct pt_regs *regs);",
+     "static syscall_fn_t orig_sys_read;"),
+    ("static long (*orig_sys_fstat)(const struct pt_regs *regs);",
+     "static syscall_fn_t orig_sys_fstat;"),
+    ("static long ksu_sys_read(const struct pt_regs *regs)",
+     "static long ksu_sys_read(unsigned long a0, unsigned long a1,\n"
+     "                         unsigned long a2, unsigned long a3,\n"
+     "                         unsigned long a4, unsigned long a5)"),
+    ("static long ksu_sys_fstat(const struct pt_regs *regs)",
+     "static long ksu_sys_fstat(unsigned long a0, unsigned long a1,\n"
+     "                          unsigned long a2, unsigned long a3,\n"
+     "                          unsigned long a4, unsigned long a5)"),
+    ("PT_REGS_SYSCALL_PARM1(regs)", "a0"),
+    ("PT_REGS_PARM2(regs)", "a1"),
+    ("PT_REGS_PARM3(regs)", "a2"),
+    ("orig_sys_read(regs)", "orig_sys_read(a0, a1, a2, a3, a4, a5)"),
+    ("orig_sys_fstat(regs)", "orig_sys_fstat(a0, a1, a2, a3, a4, a5)"),
+):
+    assert old in legacy, (old,"runtime/ksud_integration.c")
+    legacy=legacy.replace(old,new)
+s=s[:start] + (
+    "#if defined(__aarch64__) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)\n"
+    + legacy + "#else\n" + modern + "#endif\n"
+) + s[stop:]
+p.write_text(s)
+print("[compat49] runtime: nofault, bounded module-rc alloc, read ABI, read/fstat x0..x5")
+
+# The legacy SELinux inode blob is stored directly in inode->i_security,
+# not as a modern offset within a shared LSM blob. Check back-pointer.
+p=f/"selinux/inode.c"
+s=p.read_text()
+assert s.count("    return selinux_inode(inode);")==1
+s=s.replace("    return selinux_inode(inode);",
+"""#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+    struct inode_security_struct *isec;
+    if (!inode || !inode->i_security)
+        return NULL;
+    isec = (struct inode_security_struct *)inode->i_security;
+    if (unlikely(READ_ONCE(isec->inode) != inode))
+        return ERR_PTR(-EINVAL);
+    return isec;
+#else
+    return selinux_inode(inode);
+#endif""",1)
+s=s.replace('#include <linux/fs.h>', '#include <linux/fs.h>\n#include <linux/version.h>',1)
+p.write_text(s)
+print("[compat49] SELinux inode: 4.9 i_security with back-pointer validation")
