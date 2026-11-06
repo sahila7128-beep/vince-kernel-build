@@ -794,8 +794,10 @@ static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
         assert s.count("#include <linux/fs.h>") == 1
         s=s.replace("#include <linux/fs.h>",
                     "#include <linux/fs.h>\n#include <linux/version.h>",1)
-    import re
-    includes=list(re.finditer(r'(?m)^#include .+
+    anchor = ('#include "infra/su_mount_ns.h"' if rel == "policy/allowlist.c"
+              else '#include "uapi/supercall.h"')
+    assert s.count(anchor) == 1, f"{rel}: include anchor missing"
+    s=s.replace(anchor,anchor+"\n"+helper,1)
     import re
     s=re.sub(r"\bkernel_write\(", "ksu_kernel_write_compat(", s)
     s=re.sub(r"\bkernel_read\(", "ksu_kernel_read_compat(", s)
