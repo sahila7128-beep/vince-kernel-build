@@ -292,5 +292,13 @@ print("[compat49] 4.9 legacy LSM list adapter, no dynamic head insertion")
 
 replace("hook/setuid_hook.c", "#include <linux/sched/signal.h>",
         "#include <linux/sched.h>")
+replace("hook/tp_marker.c", "#include <linux/sched/signal.h>",
+        "#include <linux/sched.h>")
+replace("sulog/event.c", "#include <linux/sched/signal.h>",
+        "#include <linux/sched.h>")
+replace("policy/app_profile.c", "#include <linux/sched/signal.h>",
+        "#include <linux/sched.h>")
+replace("infra/symbol_resolver.c", "#include <linux/sched/signal.h>",
+        "#include <linux/sched.h>")
 
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
