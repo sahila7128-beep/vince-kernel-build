@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# FinaSU Linux4.9 compile feasibility probe; NOT a validated boot kernel.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$ROOT/work"
