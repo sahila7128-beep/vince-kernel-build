@@ -762,3 +762,44 @@ for rel in ("policy/allowlist.c", "manager/dynamic_manager.c"):
                       "        __attribute__((fallthrough));", 1)
     p.write_text(s)
 print("[compat49] manager/allowlist persistence and fallthrough on 4.9")
+
+
+# Linux 4.9 kernel_read takes an offset VALUE rather than a pointer.
+# __kernel_write is the exact Linux 4.9 equivalent for pointer offsets;
+# do not discard type warnings or break persistence file layout.
+for rel in ("manager/dynamic_manager.c", "policy/allowlist.c"):
+    p = f/rel
+    s = p.read_text()
+    assert s.count("kernel_write(") >= 2
+    assert s.count("kernel_read(") >= 2
+    helper = """
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+static ssize_t ksu_kernel_read_49(struct file *fp, void *buf,
+                                 size_t len, loff_t *pos)
+{
+    int ret = kernel_read(fp, *pos, buf, len);
+    if (ret > 0)
+        *pos += ret;
+    return ret;
+}
+#define ksu_kernel_write_compat __kernel_write
+#define ksu_kernel_read_compat ksu_kernel_read_49
+#else
+#define ksu_kernel_write_compat kernel_write
+#define ksu_kernel_read_compat kernel_read
+#endif
+
+"""
+    # These two translation units already include linux/version.h.
+    s=helper+s
+    import re
+    s=re.sub(r"\bkernel_write\(", "ksu_kernel_write_compat(", s)
+    s=re.sub(r"\bkernel_read\(", "ksu_kernel_read_compat(", s)
+    # Repair the wrapper's call, which must use old kernel_read.
+    s=s.replace("int ret = ksu_kernel_read_compat(fp, *pos, buf, len);",
+                "int ret = kernel_read(fp, *pos, buf, len);",1)
+    p.write_text(s)
+    print(f"[compat49] {rel}: preserve persistence offsets with 4.9 read/write ABI")
+
+replace("policy/app_profile.c", "#include <linux/sched/user.h>",
+        "#include <linux/sched.h>")
