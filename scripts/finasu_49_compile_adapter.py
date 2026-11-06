@@ -309,4 +309,49 @@ replace("infra/su_mount_ns.c", "#include <linux/sched/task.h>",
 replace("feature/selinux_hide.c", "#include <linux/sched/task.h>",
         "#include <linux/sched.h>")
 
+
+# Critical runtime ABI correction: Linux 4.9 ARM64 loads syscall handlers
+# from sys_call_table with six direct arguments, not struct pt_regs *.
+# The dispatcher must obtain pt_regs from current's syscall stack.
+replace("hook/arm64/syscall_hook.c",
+        "#include <linux/kallsyms.h>",
+        "#include <linux/kallsyms.h>\n#include <linux/sched.h>\n#include <linux/version.h>")
+replace("hook/arm64/syscall_hook.c",
+        '"__arm64_sys_ni_syscall"',
+        '(LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0) ? '
+        '"sys_ni_syscall" : "__arm64_sys_ni_syscall")')
+replace("hook/arm64/syscall_hook.c",
+        "static long __nocfi ksu_syscall_dispatcher(const struct pt_regs *regs)\n{",
+        "static long __nocfi ksu_syscall_dispatcher_regs(const struct pt_regs *regs)\n{")
+replace("hook/arm64/syscall_hook.c",
+        '''    return ret;
+}
+
+// Register a handler into the dispatcher's routing table.''',
+        '''    return ret;
+}
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+static long __nocfi ksu_syscall_dispatcher(unsigned long a0,
+       unsigned long a1, unsigned long a2, unsigned long a3,
+       unsigned long a4, unsigned long a5)
+{
+    /* The 4.9 entry assembly pushes user regs to the current task stack
+     * before invoking sys_call_table[nr] with x0..x5. Never treat x0 as
+     * a pt_regs pointer. The original nr was stashed in saved x8. */
+    const struct pt_regs *regs = task_pt_regs(current);
+    if (unlikely(!regs || regs->syscallno != ksu_dispatcher_nr))
+        return -ENOSYS;
+    return ksu_syscall_dispatcher_regs(regs);
+}
+#else
+static long __nocfi ksu_syscall_dispatcher(const struct pt_regs *regs)
+{
+    return ksu_syscall_dispatcher_regs(regs);
+}
+#endif
+
+// Register a handler into the dispatcher's routing table.''')
+print("[compat49] arm64 syscall dispatcher now uses six-direct-arg Linux 4.9 ABI")
+
 print("[compat49] ABI/header compile adapters applied. Runtime safety NOT established.")
