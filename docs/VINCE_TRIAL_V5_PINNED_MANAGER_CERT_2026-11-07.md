@@ -68,3 +68,21 @@ proof that UAPI4 or DirtySepolicy0 is implemented.
   modules together until their conflicts and DirtySepolicy sources are audited.
 
 Release status remains **TRIAL-ONLY** until actual phone results justify it.
+
+
+## GitHub Actions and strict static artifact verification
+
+Final CI build: https://github.com/sahila7128-beep/vince-kernel-build/actions/runs/42333942397 — **SUCCESS** (2026-11-07).
+Source build commit: 2b190971ac488367d02e0a4d498ab8bac5eda413.
+GitHub Actions artifact id: 13559183007.
+
+The archive produced one flashable ZIP. A *separate* Manager APK is required for the experimental legacy-ABI pairing, not a second kernel ZIP.
+
+- Flashable ZIP SHA256: **dc39fc32dbe138ca9618da0ecb518e6b736024f6278684720a30558e2efff0d5**
+- Embedded Image.gz-dtb SHA256: **8fb38e5529e23354b9a6296b0f6ff1a213efd190d7c3a88976f06c13a59d46c1**
+- APK 34606 SHA256: **6709fc62a96d17e48bdb6bc8dc1ed1a541c32e60151963f0c968726e5699c690**
+- Appended DTB SHA256: **e1eea556d8b02a19a06aa2daf647b42ffd763234bf467aaaa0187ef5b13b72bc** — BYTE IDENTICAL to booted TRIAL V4's DTB.
+
+Verified offline on the exact GitHub-produced flash ZIP: outer archive CRC, inner archive CRC, ZIP single-payload nesting, vince AnyKernel device check, expected installer rollback/sha verification stanzas, root source pin, SUSFS 2.3.0, NoMount API22 and original manager signer. The new custom signer digest is present in decompressed compiled kernel. The actual compiled image SHA256 matches the Actions metadata. APK v2 signature was verified cryptographically (RSA PKCS#1 SHA-256) together with its full APK v2 14-chunk content digest.
+
+These are **static and build tests only**, not proof of Android boot, mount behavior, module installation, DirtySepolicy 0 or banking-app support. Current device-proof status remains V4 boot only, **not V5 boot**. Do not treat a matching debug certificate as a safe production signing scheme.
