@@ -1,0 +1,30 @@
+name: C12 Proton Clang pinned toolchain transport
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths:
+      - .github/workflows/c12-toolchain-transport.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  toolchain:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Obtain pinned Proton Clang without replacing kernel source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchain
+          curl --retry 4 -fLsS --max-time 2400 -o toolchain/proton-clang-pinned.tar.gz \
+            https://codeload.github.com/kdrag0n/proton-clang/tar.gz/9fb011b183fe7e69b04b873ef6533b4b077e3c5e
+          echo '7358f655bd5af997990f208212da2687a9cd4d53cb4f1811d6035487e04076b8  toolchain/proton-clang-pinned.tar.gz' | sha256sum -c
+          ls -lh toolchain/proton-clang-pinned.tar.gz
+      - name: Upload toolchain archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: AL-C12-proton-clang-pinned
+          path: toolchain/proton-clang-pinned.tar.gz
+          compression-level: 0
+          retention-days: 30
