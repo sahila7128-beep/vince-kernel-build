@@ -34,6 +34,11 @@ P="$WORK/susfs4ksu/kernel_patches"
 # Use exactly one KernelSU implementation.
 test ! -e "$K/drivers/kernelsu"
 ln -s ../../ReSukiSU/kernel "$K/drivers/kernelsu"
+# Linux 4.9 SELinux's flask.h / av_permissions.h are generated under
+# $(objtree)/security/selinux, while ReSukiSU's include flags normally only
+# cover the source directories. Keep the generated headers in the search path.
+grep -Fq 'ccflags-y += -I$(srctree)/security/selinux' "$WORK/ReSukiSU/kernel/Kbuild"
+printf '\nccflags-y += -I$(objtree)/security/selinux\n' >> "$WORK/ReSukiSU/kernel/Kbuild"
 printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> "$K/drivers/Makefile"
 python3 - "$K/drivers/Kconfig" <<'PY'
 from pathlib import Path
@@ -193,6 +198,15 @@ done
 # ReSukiSU's ksu.c includes generated/compile.h, which is normally created
 # as a vmlinux/init-version dependency, not by make prepare. Produce this
 # actual kernel-generated file before isolated object preflight.
+# SELinux 4.9 generates its headers only when building security/selinux/.
+# Prebuild this real target first; do not invent flask.h or bypass its ACLs.
+echo "[+] Build SELinux 4.9 generated policy headers"
+make -j2 O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
+ CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" \
+ security/selinux/
+test -s out/security/selinux/flask.h
+test -s out/security/selinux/av_permissions.h
+
 echo "[+] Generate native kernel compile.h for root preflight"
 make O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
  CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" \
