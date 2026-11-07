@@ -79,6 +79,8 @@ write_boot() {
         if check_restore:
             assert (folder/"partition").read_bytes()==orig, ("restore mismatch",name)
             assert "restored and verified" in run.stdout, (name,run.stdout)
+        elif name == "correct_write":
+            assert (folder/"partition").read_bytes()==image, (name,"new image missing")
         elif part is not None:
             assert (folder/"partition").read_bytes()==part, (name,"unexpected write")
         print(f"PASS: {name} (exit={run.returncode})")
