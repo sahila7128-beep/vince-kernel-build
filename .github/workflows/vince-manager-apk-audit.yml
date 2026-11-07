@@ -1,0 +1,39 @@
+name: Vince Manager APK audit - legacy ABI source check
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/audit-vince-manager-apk.py"
+      - "scripts/vince-diagnose-readonly.sh"
+      - ".github/workflows/vince-manager-apk-audit.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-source-check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate diagnostic script syntax
+        run: |
+          python3 -m py_compile scripts/audit-vince-manager-apk.py
+          sh -n scripts/vince-diagnose-readonly.sh
+          python3 scripts/audit-vince-manager-apk.py --help
+      - name: Check pinned kernel and Manager ioctl parity without claiming UAPI4
+        run: |
+          git init -q /tmp/resukisu
+          git -C /tmp/resukisu remote add origin https://github.com/xixiaobei-bei/ReSukiSU.git
+          git -C /tmp/resukisu fetch --depth=1 origin 24cc758fec61d44c45cafeea4c844fd0856f71c9
+          git -C /tmp/resukisu checkout -q --detach FETCH_HEAD
+          test "$(git -C /tmp/resukisu rev-parse HEAD)" = 24cc758fec61d44c45cafeea4c844fd0856f71c9
+          python3 - <<'PY'
+          from pathlib import Path
+          r=Path('/tmp/resukisu')
+          h=(r/'kernel/supercalls.h').read_text()
+          m=(r/'manager/app/src/main/cpp/ksu.c').read_text()
+          assert "KSU_IOCTL_GET_INFO _IOC(_IOC_READ, 'K', 2, 0)" in h
+          assert "ksuctl(KSU_IOCTL_GET_INFO, &g_version)" in m
+          assert "uapi_version" not in h
+          assert "EXPECTED_SIZE_RESUKISU" in (r/'kernel/manager_sign.h').read_text()
+          print("PASS: pinned kernel & pinned Manager source use legacy ioctl, not UAPI4")
+          PY
