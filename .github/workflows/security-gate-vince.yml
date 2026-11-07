@@ -1,0 +1,45 @@
+name: Vince root-policy security release gate (source audit only)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/audit-vince-dirtysepolicy-gate.py'
+      - '.github/workflows/security-gate-vince.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-security-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout vince build scripts
+        uses: actions/checkout@v4
+      - name: Retrieve exact pinned ReSukiSU source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q root-src
+          git -C root-src remote add origin https://github.com/xixiaobei-bei/ReSukiSU.git
+          git -C root-src fetch --depth=1 origin 24cc758fec61d44c45cafeea4c844fd0856f71c9
+          git -C root-src checkout -q --detach FETCH_HEAD
+          test "$(git -C root-src rev-parse HEAD)" = 24cc758fec61d44c45cafeea4c844fd0856f71c9
+      - name: Static DirtySepolicy release gate (fail closed)
+        shell: bash
+        run: |
+          python3 scripts/audit-vince-dirtysepolicy-gate.py \
+            --root root-src/kernel \
+            --out artifacts/vince-security-gate.json \
+            --markdown artifacts/vince-security-gate.md
+      - name: Upload findings even when NOT_READY
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-SECURITY-NOT-READY
+          path: |
+            artifacts/vince-security-gate.json
+            artifacts/vince-security-gate.md
+          if-no-files-found: warn
