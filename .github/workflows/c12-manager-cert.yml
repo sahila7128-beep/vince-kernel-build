@@ -1,0 +1,31 @@
+name: Verify FinaSU 1.4.5 official Manager signing certificate
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths: [.github/workflows/c12-manager-cert.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Download and authenticate official v1.4.5 Manager APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+          curl --retry 3 -fLsS -o manager.apk https://github.com/LyraVoid/FinaSU/releases/download/v1.4.5/FinaSU_v1.4.5_33168-release.apk
+          echo 'edbe2e8fb860135ad0142d672ded2ee4327d70a06746d8d629645184f7eeaeb6  manager.apk' | sha256sum -c -
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apksigner
+          apksigner verify --print-certs -v manager.apk | tee reports/apksigner.txt
+          grep -i 'Signer #1 certificate SHA-256 digest: 2d89b50aaf1db013c2b6738f973f48b62ea21a3a8d7216bfec3521065d448458' reports/apksigner.txt
+          sha256sum manager.apk > reports/apk-sha256.txt
+      - name: Upload certificate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: finasu-145-manager-certificate-report
+          path: reports/
+          if-no-files-found: warn
