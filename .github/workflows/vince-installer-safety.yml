@@ -1,0 +1,27 @@
+name: Vince AnyKernel recovery safety simulation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/test-vince-installer-sandbox.py'
+      - '.github/workflows/vince-installer-safety.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-flash:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify installer generator source syntax
+        run: |
+          bash -n scripts/build-vince-resukisu-susfs-experimental.sh
+          python3 -m py_compile scripts/test-vince-installer-sandbox.py
+      - name: Run 5 readback and original-boot restoration fixture tests
+        run: |
+          command -v busybox
+          python3 scripts/test-vince-installer-sandbox.py
