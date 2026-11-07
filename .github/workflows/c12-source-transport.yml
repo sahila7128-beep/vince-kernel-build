@@ -1,0 +1,57 @@
+name: C12 pinned AL source and FinaSU history transport
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths:
+      - .github/workflows/c12-source-transport.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acquire:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Download AL Linux 4.9.391 pinned archive
+        run: |
+          set -euxo pipefail
+          mkdir -p source
+          curl --retry 4 -fLsS --max-time 900 -o source/al-pinned.tar.gz \
+            https://codeload.github.com/k4ngcaribug/kernel_xiaomi_vince/tar.gz/80647b3a14a44feadd0a8cbd22801f6b3be243f4
+          echo 'f6fc193ab1b29890c1d2a2946d8e83c023648886f036b7e41b4b6f0502792f4e  source/al-pinned.tar.gz' | sha256sum -c
+          tar -tzf source/al-pinned.tar.gz | head -15 || true
+          ls -lh source/al-pinned.tar.gz
+      - name: Checkout full FinaSU history v1.4.5
+        run: |
+          set -euxo pipefail
+          git clone --quiet https://github.com/LyraVoid/FinaSU.git source/finasu
+          git -C source/finasu checkout --detach a839ce2d742f0f1450a3aad20bdc14bc060da840
+          test "$(git -C source/finasu rev-parse HEAD)" = a839ce2d742f0f1450a3aad20bdc14bc060da840
+          git -C source/finasu rev-list --count HEAD | tee source/finasu-commitcount.txt
+          tar -czf source/finasu-git.tar.gz -C source/finasu .git
+          ls -lh source/finasu-git.tar.gz
+      - name: Download exact system build helper packages
+        run: |
+          set -euxo pipefail
+          cd source
+          sudo apt-get update -qq
+          apt-get download bc bison flex m4
+          sha256sum *.deb > host-tools-sha256.txt
+      - name: Upload pinned AL source
+        uses: actions/upload-artifact@v4
+        with:
+          name: AL-vince-4.9.391-pinned-source
+          path: source/al-pinned.tar.gz
+          compression-level: 0
+          retention-days: 30
+      - name: Upload FinaSU v1.4.5 git history and local build helpers
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinaSU-1.4.5-source-history-host-tools
+          path: |
+            source/finasu-git.tar.gz
+            source/finasu-commitcount.txt
+            source/*.deb
+            source/host-tools-sha256.txt
+          compression-level: 0
+          retention-days: 30
