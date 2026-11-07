@@ -1,0 +1,36 @@
+name: C12 FinaSU 1.4.5 official binary inspection
+on:
+  push:
+    branches:
+      - c12-finasu145-rebuild
+    paths:
+      - .github/workflows/c12-finasu145-asset-audit.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect-official:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Obtain pinned official v1.4.5 assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p official
+          curl -fL --retry 4 --max-time 600 -o official/kernel-bundle.zip https://github.com/LyraVoid/FinaSU/releases/download/v1.4.5/FinaSU_v1.4.5_kernel-bundle.zip
+          echo '89dedf7352961cb6ace34a9bb6423217d628ae504268acd70d63cf221e2aae8b  official/kernel-bundle.zip' | sha256sum -c
+          unzip -Z1 official/kernel-bundle.zip | tee official/bundle-files.txt
+          unzip -oq official/kernel-bundle.zip -d official/extracted
+          find official/extracted -type f -printf '%p %s bytes\n' | sort > official/files.txt
+          cat official/files.txt | head -100
+          find official/extracted -type f -name 'ksud*' -exec sh -c 'for f do file "$f"; sha256sum "$f"; done' sh {} +
+      - name: Archive official binary without modification
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinaSU145-official-bundle-verified
+          path: |
+            official/kernel-bundle.zip
+            official/bundle-files.txt
+            official/files.txt
+          compression-level: 0
