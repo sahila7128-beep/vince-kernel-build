@@ -31,6 +31,39 @@ get_source https://github.com/maxsteeel/nomount.git "$WORK/NoMount" "$NOMOUNT"
 K="$WORK/ZeroTwo"
 P="$WORK/susfs4ksu/kernel_patches"
 
+# TRIAL V5: match the legacy 34606 kernel ABI to an APK built from the SAME
+# ReSukiSU pinned commit (upstream Actions 37106422885, Manager-release).
+# The publicly downloadable APK uses an ephemeral Android DEBUG certificate,
+# NOT the ReSukiSU production signing certificate. Trust only this exact
+# certificate fingerprint without deleting any pre-existing trusted managers.
+# Security trade-off: a debug certificate is not a production signing key.
+# This authorizes a specific certificate, not an arbitrary APK / UAPI v4.
+python3 - "$WORK/ReSukiSU/kernel" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+header = root / "manager_sign.h"
+checker = (root / "apk_sign.c").read_text()
+original = header.read_text()
+assert "{ EXPECTED_SIZE, EXPECTED_HASH }" in checker, "Custom signer dispatch missing"
+assert "#ifdef EXPECTED_SIZE" in checker, "Custom signer guard missing"
+assert '#define EXPECTED_SIZE_RESUKISU 0x377' in original, "Upstream signing whitelist changed"
+assert "#define EXPECTED_SIZE " not in original, "Custom signer already configured"
+certificate_length = 744
+certificate_sha = "b8eac4bd07e3cfee160808a6297cd59bae3878a66d233cfcaf383c3cc4e4395b"
+original += (
+    "\n/* Vince TRIAL V5: exact legacy Manager-release certificate from pinned\n"
+    " * upstream CI run 37106422885. Android DEBUG key, not final security. */\n"
+    f"#define EXPECTED_SIZE {certificate_length}\n"
+    f'#define EXPECTED_HASH "{certificate_sha}"\n'
+)
+header.write_text(original)
+assert "#define EXPECTED_SIZE 744" in header.read_text()
+assert certificate_sha in header.read_text()
+print("[+] Legacy Manager 34606 signing cert pinned; UAPI remains truthful (legacy/0)")
+PY
+
+
 # Use exactly one KernelSU implementation.
 test ! -e "$K/drivers/kernelsu"
 ln -s ../../ReSukiSU/kernel "$K/drivers/kernelsu"
@@ -235,6 +268,14 @@ NOMOUNT_COMMIT=$NOMOUNT
 NOMOUNT_KERNEL_API=22
 SELINUX_NETLINK_HARDENING=READPRIV_GETNEIGH_ANDROID13
 ROM_ADBROOT_POLICY_CHANGED=NO
+MANAGER_COMPANION_VERSION=34606
+MANAGER_COMPANION_ROOT_COMMIT=24cc758fec61d44c45cafeea4c844fd0856f71c9
+MANAGER_COMPANION_APK_SHA256=6709fc62a96d17e48bdb6bc8dc1ed1a541c32e60151963f0c968726e5699c690
+MANAGER_COMPANION_DER_SIZE=744
+MANAGER_COMPANION_DER_SHA256=b8eac4bd07e3cfee160808a6297cd59bae3878a66d233cfcaf383c3cc4e4395b
+MANAGER_COMPANION_CERT_TYPE=ANDROID_DEBUG_UNPROVEN_PRODUCTION_SECURITY
+MANAGER_UAPI4_IMPLEMENTED=NO
+MANAGER_API_COMPAT_STRATEGY=LEGACY_MANAGER_34606_WITH_PINNED_CERT
 SUSFS_VERSION=v2.3.0
 DEVICE_BOOT_TESTED=NO
 MODULE_INSTALL_TESTED=NO
