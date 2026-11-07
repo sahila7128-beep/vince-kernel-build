@@ -1,0 +1,35 @@
+name: FinaSU 1.5.0 history transport for AL C12
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths:
+      - .github/workflows/c12-finasu150-source.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout pinned upstream FinaSU v1.5.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --quiet https://github.com/LyraVoid/FinaSU.git finasu
+          git -C finasu checkout --detach fbf8e003d902c43213d435632a22e4fb1a219aeb
+          test "$(git -C finasu rev-parse HEAD)" = "fbf8e003d902c43213d435632a22e4fb1a219aeb"
+          test "$(git -C finasu rev-list --count HEAD)" = 3174
+          git -C finasu rev-list --count HEAD > finasu-count.txt
+          tar -czf finasu-git150.tar.gz -C finasu .git
+          sha256sum finasu-git150.tar.gz > HASHES.txt
+      - name: Upload full pinned upstream history
+        uses: actions/upload-artifact@v4
+        with:
+          name: FinaSU-v1.5.0-pinned-source-history
+          path: |
+            finasu-git150.tar.gz
+            finasu-count.txt
+            HASHES.txt
+          compression-level: 0
+          retention-days: 30
