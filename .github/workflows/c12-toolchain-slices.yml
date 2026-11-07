@@ -1,0 +1,100 @@
+name: C12 compiler transport individual verified 48MB slices
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths: [.github/workflows/c12-toolchain-slices.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  download-split:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Download fixed commit archive and SHA verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p chunks
+          curl --retry 4 -fLsS --max-time 3000 -o compiler.tar.gz https://codeload.github.com/kdrag0n/proton-clang/tar.gz/9fb011b183fe7e69b04b873ef6533b4b077e3c5e
+          echo "7358f655bd5af997990f208212da2687a9cd4d53cb4f1811d6035487e04076b8  compiler.tar.gz" | sha256sum -c -
+          split -b 48000000 -d -a 2 compiler.tar.gz chunks/part.
+          (cd chunks && sha256sum part.* > CHUNKS.sha256)
+          sha256sum compiler.tar.gz > chunks/ARCHIVE.sha256
+      - name: Upload verified slice 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-00
+          path: chunks/part.00
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-01
+          path: chunks/part.01
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-02
+          path: chunks/part.02
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-03
+          path: chunks/part.03
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-04
+          path: chunks/part.04
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-05
+          path: chunks/part.05
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-06
+          path: chunks/part.06
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 07
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-07
+          path: chunks/part.07
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 08
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-08
+          path: chunks/part.08
+          compression-level: 0
+          retention-days: 30
+      - name: Upload verified slice 09
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-slice-09
+          path: chunks/part.09
+          compression-level: 0
+          retention-days: 30
+      - name: Upload SHA256 manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: c12-compiler-manifest
+          path: |
+            chunks/ARCHIVE.sha256
+            chunks/CHUNKS.sha256
+          retention-days: 30
