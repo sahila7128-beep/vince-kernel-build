@@ -36,6 +36,12 @@ su -c 'id;
     [ -r "$f" ] || continue;
     grep -nE "type[[:space:]]+adbroot|adb_root" "$f" 2>/dev/null && echo "source=$f";
   done;
+  echo "--- mount activation indicators (init namespace) ---";
+  if [ -r /proc/1/mountinfo ]; then
+    grep -E "overlay|/data/adb|kernelsu|susfs|nomount" /proc/1/mountinfo | head -n 100 || true;
+  fi;
+  echo "--- boot status ---";
+  getprop sys.boot_completed;
   echo "--- contexts ---";
   ls -dZ /data/adb /data/adb/modules /data/adb/ksud 2>/dev/null || true' 2>&1
 echo "Read-only scan completed; no policy, module or kernel writes."
