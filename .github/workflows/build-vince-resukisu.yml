@@ -75,3 +75,11 @@ jobs:
             artifacts/kernel-sha256.txt
             artifacts/zip-sha256.txt
           if-no-files-found: error
+
+      - name: Save untested flash ZIP as an explicit research artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-ReSukiSU-SUSFS230-NoMount22-UNTESTED
+          path: artifacts/ZeroTwo-ReSukiSU-SUSFS230-NoMount22-vince-UNTESTED.zip
+          if-no-files-found: error
