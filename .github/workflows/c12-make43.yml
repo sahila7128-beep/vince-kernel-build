@@ -1,0 +1,25 @@
+name: C12 Ubuntu GNU Make 4.3 build tool
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths: [.github/workflows/c12-make43.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  make43:
+    runs-on: ubuntu-22.04
+    steps:
+      - run: |
+          set -euo pipefail
+          mkdir -p tool
+          cd tool
+          sudo apt-get update -qq
+          apt-get download make
+          dpkg-deb -I make_*.deb | head -30
+          sha256sum make_*.deb > CHECKSUMS.txt
+          ls -lh make_*.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: C12-Ubuntu-GNU-Make-4.3
+          path: tool/
+          compression-level: 0
