@@ -1,0 +1,26 @@
+name: Vince module ZIP policy audit (offline)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/audit-vince-module-zips.py'
+      - '.github/workflows/vince-module-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-auditor:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile module audit script
+        run: python3 -m py_compile scripts/audit-vince-module-zips.py
+      - name: Test scanner with representative synthetic policy rules
+        run: python3 scripts/audit-vince-module-zips.py --self-test
+      - name: Confirm no personal module archives are uploaded
+        run: |
+          ! find . -name 'AlwaysStrong*.zip' -o -name 'BreZygisk*.zip' -o -name 'Modul.rar' | grep .
