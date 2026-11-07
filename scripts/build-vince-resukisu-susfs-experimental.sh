@@ -55,6 +55,69 @@ for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
 done
 python3 "$ROOT/scripts/vendor_fix.py" "$K" "$P/50_add_susfs_in_kernel-4.9.patch"
 
+# Linkage fixes for the 4.9 SUSFS patch versus the ReSukiSU v24cc API.
+# Do not create permanent always-on hooks or disable root-module features.
+python3 - "$K" "$WORK/ReSukiSU/kernel" <<'PY'
+from pathlib import Path
+import sys
+k, su = map(Path, sys.argv[1:])
+
+def exactly_once(path, before, after):
+    s = path.read_text()
+    count = s.count(before)
+    if count != 1:
+        raise SystemExit(f"SUSFS/ReSukiSU ABI mismatch: {path} {before[:75]!r} got={count}")
+    path.write_text(s.replace(before, after, 1))
+
+# SUSFS 4.9 patch refers to static keys from a newer root variant;
+# ReSukiSU stores the SAME enabled/disabled state as regular exported booleans.
+for name in ("fs/read_write.c", "fs/stat.c"):
+    p = k / name
+    exactly_once(p,
+        "extern struct static_key_true ksu_is_init_rc_hook_enabled;",
+        "extern bool ksu_init_rc_hook;")
+    s = p.read_text()
+    count = s.count("static_branch_unlikely(&ksu_is_init_rc_hook_enabled)")
+    if count < 1:
+        raise SystemExit(f"Missing init_rc hook access: {name}")
+    p.write_text(s.replace("static_branch_unlikely(&ksu_is_init_rc_hook_enabled)",
+                           "unlikely(READ_ONCE(ksu_init_rc_hook))"))
+exactly_once(k/"drivers/input/input.c",
+    "extern struct static_key_true ksu_is_input_hook_enabled;",
+    "extern bool ksu_input_hook;")
+exactly_once(k/"drivers/input/input.c",
+    "static_branch_unlikely(&ksu_is_input_hook_enabled)",
+    "unlikely(READ_ONCE(ksu_input_hook))")
+
+# SUSFS source has the intended implementation but marks it file-local;
+# ReSukiSU's unmount task-work needs to call it after unmounting.
+exactly_once(k/"fs/susfs.c",
+    "static void susfs_run_sus_path_loop(void) {",
+    "void susfs_run_sus_path_loop(void) {")
+
+# This 4.9 SUSFS port does not implement the Android-data/sdcard-root
+# i_state API used by newer root clients. Never falsely report success.
+# Explicitly reject these unsupported command IDs, preserving all APIs
+# actually available in the pinned SUSFS 2.3.0 Linux 4.9 port.
+p = su/"supercalls.c"
+for name in ("CMD_SUSFS_SET_ANDROID_DATA_ROOT_PATH", "CMD_SUSFS_SET_SDCARD_ROOT_PATH"):
+    before = ("if (cmd == " + name + ") {\n"
+              "            susfs_set_i_state_on_external_dir(arg);\n"
+              "            return 0;\n"
+              "        }")
+    after = ("if (cmd == " + name + ") {\n"
+             "            pr_warn_ratelimited(\"SUSFS Linux 4.9: external root i_state API not implemented by pinned port\\n\");\n"
+             "            return -EOPNOTSUPP;\n"
+             "        }")
+    exactly_once(p, before, after)
+
+# Fail closed if modern static keys are still referenced.
+for p in (k/"fs/read_write.c", k/"fs/stat.c", k/"drivers/input/input.c"):
+    if "ksu_is_init_rc_hook_enabled" in p.read_text() or "ksu_is_input_hook_enabled" in p.read_text():
+        raise SystemExit(f"Unresolved 4.9 hook symbol in {p}")
+print("[+] Four LTO undefined symbols resolved using real legacy API or explicit unsupported errno")
+PY
+
 # Root integration here uses ReSukiSU's native Linux 4.9 legacy API.
 # Do not load modern FinaSU syscall/SELinux compatibility shims into this build.
 
