@@ -1,0 +1,67 @@
+name: C12 verified toolchain transport in parts
+on:
+  push:
+    branches: [c12-finasu145-rebuild]
+    paths:
+      - .github/workflows/c12-toolchain-chunks.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chunks:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Download and independently verify pinned compiler
+        run: |
+          set -euo pipefail
+          mkdir -p chunks
+          curl -fLsS --retry 4 --max-time 3000 -o compiler.tar.gz https://codeload.github.com/kdrag0n/proton-clang/tar.gz/9fb011b183fe7e69b04b873ef6533b4b077e3c5e
+          echo '7358f655bd5af997990f208212da2687a9cd4d53cb4f1811d6035487e04076b8  compiler.tar.gz' | sha256sum -c -
+          split -b 48000000 -d -a 2 compiler.tar.gz chunks/proton.part.
+          find chunks -name '*.part.*' -exec sha256sum {} + | sort > chunks/CHUNKS.sha256
+          sha256sum compiler.tar.gz > chunks/ORIGINAL.sha256
+          wc -c chunks/proton.part.* > chunks/SIZES.txt
+      - name: Upload parts 00-03
+        uses: actions/upload-artifact@v4
+        with:
+          name: C12-proton-part-00-03
+          path: |
+            chunks/proton.part.00
+            chunks/proton.part.01
+            chunks/proton.part.02
+            chunks/proton.part.03
+          compression-level: 0
+          retention-days: 30
+      - name: Upload parts 04-07
+        uses: actions/upload-artifact@v4
+        with:
+          name: C12-proton-part-04-07
+          path: |
+            chunks/proton.part.04
+            chunks/proton.part.05
+            chunks/proton.part.06
+            chunks/proton.part.07
+          compression-level: 0
+          retention-days: 30
+      - name: Upload parts 08-11
+        uses: actions/upload-artifact@v4
+        with:
+          name: C12-proton-part-08-11
+          path: |
+            chunks/proton.part.08
+            chunks/proton.part.09
+            chunks/proton.part.10
+            chunks/proton.part.11
+          compression-level: 0
+          retention-days: 30
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: C12-proton-checksums
+          path: |
+            chunks/CHUNKS.sha256
+            chunks/ORIGINAL.sha256
+            chunks/SIZES.txt
+          compression-level: 0
+          retention-days: 30
