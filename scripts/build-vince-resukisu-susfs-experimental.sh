@@ -330,44 +330,78 @@ fi;
 ui_print "PASS: original boot backup checked. Keep an external boot backup.";
 '''
 verify = r'''
-# Verify flash readback. If corrupt, attempt automatic restoration of the
-# original complete boot partition from the validated dump.
+# InstallerFIX4: fail-closed restore for BOTH interrupted/failed AnyKernel
+# write_boot and corrupt readback. The original backup is kept in RAM.
+restore_original_boot() {
+  ui_print "Attempting verified recovery of original boot...";
+  if [ ! -b "$BLOCK" ] || [ ! -s "$BOOTIMG" ]; then
+    ui_print "ERROR: missing original boot backup or partition.";
+    return 1;
+  fi;
+  if [ "$(sha256sum "$BOOTIMG" | cut -d' ' -f1)" != "$boot_backup_sha256" ]; then
+    ui_print "ERROR: original boot backup integrity mismatch.";
+    return 1;
+  fi;
+  if ! dd if="$BOOTIMG" of="$BLOCK" bs=4096 2>/dev/null; then
+    ui_print "ERROR: original boot rewrite failed.";
+    return 1;
+  fi;
+  sync;
+  restore_blocks=$(( (boot_backup_size + 4095) / 4096 ));
+  restore_actual=$(dd if="$BLOCK" bs=4096 count="$restore_blocks" 2>/dev/null | head -c "$boot_backup_size" | sha256sum | cut -d' ' -f1);
+  if [ "$restore_actual" != "$boot_backup_sha256" ]; then
+    ui_print "ERROR: restored original boot did not match SHA-256.";
+    return 1;
+  fi;
+  ui_print "PASS: original boot restored and verified.";
+  return 0;
+}
+
+# Isolate the third-party AnyKernel write. Its abort() calls exit 1;
+# without a subshell, an early write failure bypasses our rollback logic.
+# No firmware, system, data, userdata or module partitions are modified here.
+if ( write_boot ); then
+  ui_print "AnyKernel write function completed.";
+else
+  if restore_original_boot; then
+    abort "NEW KERNEL NOT INSTALLED: write failed, original boot restored.";
+  fi;
+  abort "CRITICAL: write failed and original boot restore could not be confirmed. Stay in recovery and restore external boot backup.";
+fi;
+
+# Verify SHA256 readback of the actual boot partition (not only ZIP CRC).
 ui_print "Verifying boot partition write on $BLOCK...";
-if [ ! -s "$AKHOME/boot-new.img" ]; then
-  abort "AnyKernel output missing; boot write NOT confirmed.";
-fi;
-if [ ! -b "$BLOCK" ]; then
-  abort "Boot device not accessible as block device; write NOT confirmed.";
-fi;
-verify_size=$(wc -c < "$AKHOME/boot-new.img");
-if [ "$verify_size" -lt 1048576 ] || [ "$verify_size" -gt "$boot_backup_size" ]; then
-  abort "Unexpected repacked boot size. Installation NOT confirmed.";
-fi;
-verify_blocks=$(( (verify_size + 4095) / 4096 ));
-verify_expected=$(sha256sum "$AKHOME/boot-new.img" | cut -d' ' -f1);
-sync;
-verify_actual=$(dd if="$BLOCK" bs=4096 count="$verify_blocks" 2>/dev/null | head -c "$verify_size" | sha256sum | cut -d' ' -f1);
-if [ -z "$verify_actual" ] || [ "$verify_expected" != "$verify_actual" ]; then
-  ui_print "BOOT READBACK MISMATCH. Trying to restore original boot...";
-  if [ -s "$BOOTIMG" ] && [ "$(sha256sum "$BOOTIMG" | cut -d' ' -f1)" = "$boot_backup_sha256" ]; then
-    if dd if="$BOOTIMG" of="$BLOCK" bs=4096 2>/dev/null; then
-      sync;
-      restore_blocks=$(( (boot_backup_size + 4095) / 4096 ));
-      restore_actual=$(dd if="$BLOCK" bs=4096 count="$restore_blocks" 2>/dev/null | head -c "$boot_backup_size" | sha256sum | cut -d' ' -f1);
-      if [ "$restore_actual" = "$boot_backup_sha256" ]; then
-        abort "New kernel NOT installed. ORIGINAL boot restored and SHA-256 verified.";
-      fi;
+verify_problem="";
+if [ ! -s "$AKHOME/boot-new.img" ] || [ ! -b "$BLOCK" ]; then
+  verify_problem="Missing repacked boot image or partition";
+else
+  verify_size=$(wc -c < "$AKHOME/boot-new.img");
+  if [ "$verify_size" -lt 1048576 ] || [ "$verify_size" -gt "$boot_backup_size" ]; then
+    verify_problem="Unexpected repacked boot size";
+  else
+    verify_blocks=$(( (verify_size + 4095) / 4096 ));
+    verify_expected=$(sha256sum "$AKHOME/boot-new.img" | cut -d' ' -f1);
+    sync;
+    verify_actual=$(dd if="$BLOCK" bs=4096 count="$verify_blocks" 2>/dev/null | head -c "$verify_size" | sha256sum | cut -d' ' -f1);
+    if [ -z "$verify_expected" ] || [ "$verify_expected" != "$verify_actual" ]; then
+      verify_problem="SHA256 readback mismatch";
     fi;
   fi;
-  abort "CRITICAL: boot readback failed AND original restoration was not verified. Stay in recovery; restore external boot backup.";
+fi;
+if [ -n "$verify_problem" ]; then
+  ui_print "BOOT VERIFICATION FAILED: $verify_problem";
+  if restore_original_boot; then
+    abort "NEW KERNEL NOT INSTALLED: original boot restored and verified.";
+  fi;
+  abort "CRITICAL: verification failed and original boot restore could not be confirmed. Stay in recovery and restore external boot backup.";
 fi;
 ui_print "PASS: written boot image matches (SHA-256).";
 '''
 content = content.replace(dump_anchor, dump_anchor + preflight + "\n", 1)
-content = content.replace(write_anchor, write_anchor + verify + "\n", 1)
+content = content.replace(write_anchor, verify + "\n", 1)
 path.write_text(content)
 PY
-printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256_WITH_PRECHECK_AND_RESTORE\nINSTALLER_FIXED_VERSION=3\n' >> "$AK/BUILD-MANIFEST.txt"
+printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256_WITH_EARLY_FAILURE_ROLLBACK\nINSTALLER_FIXED_VERSION=4\n' >> "$AK/BUILD-MANIFEST.txt"
 ZIP="$OUT/ZeroTwo-ReSukiSU-SUSFS230-NoMount22-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
