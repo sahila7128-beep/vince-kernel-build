@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT_COMMIT = "24cc758fec61d44c45cafeea4c844fd0856f71c9"
 CHECKS = (
     ("ROOT_FILE_TYPE", "selinux/selinux.h", r'^\s*#define\s+KERNEL_SU_FILE\s+"ksu_file"', True),
+    ("LEGACY_MANAGER_IOCTL_UAPI0", "supercalls.h", r"^\s*#define\s+KSU_IOCTL_GET_INFO\s+_IOC\(_IOC_READ,\s*'K',\s*2,\s*0\)", True),\n
     ("ROOT_DOMAIN", "selinux/selinux.h", r'^\s*#define\s+KERNEL_SU_DOMAIN\s+"(?:su|ksu)"', False),
     ("CREATES_ROOT_FILE_TYPE", "selinux/rules.c", r'ksu_type\s*\(\s*db\s*,\s*KERNEL_SU_FILE', True),
     ("PERMISSIVE_ROOT_DOMAIN", "selinux/rules.c", r'ksu_permissive\s*\(\s*db\s*,\s*KERNEL_SU_DOMAIN\s*\)', True),
@@ -43,6 +44,7 @@ def inspect(root):
                 detector_source="https://github.com/LSPosed/DirtySepolicy",
                 caveats=[
                   "ksu_file is an explicit SELinux context marker checked by DirtySepolicy.",
+                  "Pinned root uses legacy zero-sized GET_INFO ioctl. Manager v4.2.0-rc3 uses a size-encoded GET_INFO and sets kernel UAPI to 0 after fallback; never claim full-featured API 4.",
                   "This source audit does not run Android, a banking app or a real recovery.",
                   "Eliminating one marker does not prove no root leaks; source absence never equals runtime PASS.",
                   "Never falsify SELinux queries or detector responses to claim DirtySepolicy=0.",
