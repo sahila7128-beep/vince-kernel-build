@@ -1,0 +1,49 @@
+name: Build standalone KeyMint diagnostic v2 APK
+on:
+  push:
+    branches: [diag-keymint-oaep-v2]
+    paths:
+      - .github/workflows/vince-keymint-apk-v2.yml
+      - diagnostics/keymint-oaep-v2/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build minimal Android APK without Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_HOME"
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          JAR="$(find "$ANDROID_HOME/platforms" -name android.jar | sort -V | tail -n 1)"
+          test -x "$BT/aapt2" && test -x "$BT/d8" && test -x "$BT/zipalign" && test -x "$BT/apksigner"
+          test -f "$JAR"
+          echo "Build tools: $BT; SDK: $JAR"
+          mkdir -p out/classes out/dex release
+          APP=diagnostics/keymint-oaep-v2/app
+          javac -encoding UTF-8 -source 8 -target 8 -cp "$JAR" -d out/classes "$APP/src/org/vince/keymintdiagnostic/v2/MainActivity.java"
+          test "$(find out/classes -name '*.class' | wc -l)" -ge 1
+          "$BT/d8" --lib "$JAR" --min-api 26 --output out/dex $(find out/classes -name '*.class')
+          test -s out/dex/classes.dex
+          "$BT/aapt2" link --manifest "$APP/AndroidManifest.xml" -I "$JAR" --min-sdk-version 26 --target-sdk-version 28 -o out/unsigned.apk
+          (cd out/dex && zip -q -j ../unsigned.apk classes.dex)
+          "$BT/zipalign" -f -p 4 out/unsigned.apk out/aligned.apk
+          keytool -genkeypair -alias vince_diagnostic -keyalg RSA -keysize 2048 -validity 365 -dname 'CN=Vince Diagnostic Test Build' -keystore out/local-test-sign.jks -storepass changeme -keypass changeme -noprompt
+          "$BT/apksigner" sign --ks out/local-test-sign.jks --ks-key-alias vince_diagnostic --ks-pass pass:changeme --key-pass pass:changeme --out release/Vince-KeyMint-OAEP-Diagnostic-v2.apk out/aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs release/Vince-KeyMint-OAEP-Diagnostic-v2.apk
+          unzip -t release/Vince-KeyMint-OAEP-Diagnostic-v2.apk
+          sha256sum release/Vince-KeyMint-OAEP-Diagnostic-v2.apk | tee release/SHA256SUMS.txt
+          echo "Offline APK; no INTERNET permission. Ephemeral AndroidKeyStore keys auto-deleted." > release/README.txt
+          echo "Tap Run, wait until END, then Copy Report." >> release/README.txt
+      - name: Upload standalone APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vince-KeyMint-OAEP-Diagnostic-v2
+          path: release/
+          compression-level: 0
+          retention-days: 14
