@@ -1,0 +1,77 @@
+name: Linux 4.9 vince ReSukiSU SUSFS 2.3.0 build probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/build-vince-resukisu-susfs-experimental.sh"
+      - "scripts/vendor_fix.py"
+      - ".github/workflows/build-vince-resukisu.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git make python3 zip unzip bc bison flex \
+            libssl-dev libelf-dev libncurses-dev cpio \
+            clang-14 llvm-14 lld-14 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Expose LLVM 14 linker for kernel LTO
+        run: |
+          test -x /usr/bin/ld.lld-14
+          for bin in ld.lld llvm-ar llvm-dis llvm-link llvm-as llvm-nm llvm-objcopy llvm-strip llvm-readelf llvm-ranlib opt llc; do
+            if [ -x "/usr/bin/$bin-14" ]; then
+              sudo ln -sf "/usr/bin/$bin-14" "/usr/local/bin/$bin"
+            fi
+          done
+          ld.lld --version
+          llvm-ar --version | head -n1
+          llvm-dis --version | head -n1
+          test -x /usr/local/bin/llvm-dis
+
+      - name: Validate scripts
+        run: |
+          bash -n scripts/build-vince-resukisu-susfs-experimental.sh
+          python3 -m py_compile scripts/vendor_fix.py
+          # ReSukiSU uses its own native Linux 4.9 compatibility backports.
+
+      - name: Build & package kernel (experimental)
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/build-vince-resukisu-susfs-experimental.sh 2>&1 | tee build.log
+
+      - name: Save build log even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-resukisu-4.9-build-log
+          path: |
+            build.log
+            artifacts/MANIFEST.txt
+            artifacts/kernel-changes.txt
+          if-no-files-found: warn
+
+      - name: Upload compile-only metadata (no flashable artifact)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vince-ReSukiSU-COMPILE-ONLY-NOFLASH
+          path: |
+            artifacts/MANIFEST.txt
+            artifacts/kernel-sha256.txt
+            artifacts/zip-sha256.txt
+          if-no-files-found: error
