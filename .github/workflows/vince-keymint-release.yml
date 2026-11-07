@@ -1,0 +1,38 @@
+name: Publish Vince KeyMint Diagnostic APK
+on:
+  push:
+    branches: [diag-keymint-oaep-v1]
+    paths: [.github/workflows/vince-keymint-release.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retrieve verified successful diagnostic artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          gh run download 42412120285 --repo "$GITHUB_REPOSITORY" --name Vince-KeyMint-RSA-OAEP-Diagnostic --dir release
+          test -s release/Vince-KeyMint-RSA-OAEP-Diagnostic.apk
+          echo "431526f3412beb7b0ebfcb96f7fb59d85b071f847add7e75f8ca42742179766c  release/Vince-KeyMint-RSA-OAEP-Diagnostic.apk" | sha256sum -c -
+      - name: Publish direct download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="vince-keymint-diagnostic-v1.0"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/Vince-KeyMint-RSA-OAEP-Diagnostic.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" release/Vince-KeyMint-RSA-OAEP-Diagnostic.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Vince KeyMint RSA-OAEP Diagnostic v1.0" --notes "Standalone offline diagnostic app. No root or INTERNET permission. Uses ephemeral test keys; checks SHA-256 OAEP with MGF1 SHA-1 and SHA-256. SHA256 APK: 431526f3412beb7b0ebfcb96f7fb59d85b071f847add7e75f8ca42742179766c. Diagnostic only; not a kernel or fix." --prerelease --latest=false
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets
