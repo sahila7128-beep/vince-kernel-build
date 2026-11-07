@@ -298,40 +298,76 @@ grep -qx 'BLOCK=/dev/block/bootdevice/by-name/boot;' "$AK/anykernel.sh"
 find "$AK" -maxdepth 1 -type f -name 'Image*' -delete
 cp "$IMG" "$AK/Image.gz-dtb"
 cp "$OUT/MANIFEST.txt" "$AK/BUILD-MANIFEST.txt"
-# Verify installation success on real boot partition rather than trusting
-# legacy AnyKernel's write status (it may swallow write errors).
+# Verify installation on the actual boot partition. Fail closed and preserve
+# original boot image in RAM throughout this operation; never claim boot tested.
 python3 - "$AK/anykernel.sh" <<'PY'
 from pathlib import Path
 import sys
-path=Path(sys.argv[1]); content=path.read_text()
-anchor="write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk\n"
-assert content.count("\n"+anchor)==1, "unexpected AnyKernel boot install stanza"
-verify='''
-# InstallerFIX2: AnyKernel3 creates boot-new.img under $AKHOME,
-# not $SPLITIMG. Verify the written image-sized prefix of the partition.
+path = Path(sys.argv[1])
+content = path.read_text()
+dump_anchor = "dump_boot; # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk\n"
+write_anchor = "write_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk\n"
+assert content.count("\n" + dump_anchor) == 1, "unexpected AnyKernel boot dump stanza"
+assert content.count("\n" + write_anchor) == 1, "unexpected AnyKernel boot write stanza"
+preflight = r'''
+# InstallerFIX3: capture and validate original boot partition BEFORE writing.
+ui_print "Checking original boot image and recovery backup...";
+if [ ! -b "$BLOCK" ] || [ ! -s "$BOOTIMG" ]; then
+  abort "Original boot backup or block device missing. No write attempted.";
+fi;
+boot_backup_size=$(wc -c < "$BOOTIMG");
+if [ "$boot_backup_size" -lt 1048576 ]; then
+  abort "Original boot image too small. No write attempted.";
+fi;
+boot_backup_magic=$(dd if="$BOOTIMG" bs=8 count=1 2>/dev/null);
+if [ "$boot_backup_magic" != "ANDROID!" ]; then
+  abort "Original boot does not have an Android boot header. No write attempted.";
+fi;
+boot_backup_sha256=$(sha256sum "$BOOTIMG" | cut -d' ' -f1);
+if [ -z "$boot_backup_sha256" ]; then
+  abort "Cannot verify original boot backup. No write attempted.";
+fi;
+ui_print "PASS: original boot backup checked. Keep an external boot backup.";
+'''
+verify = r'''
+# Verify flash readback. If corrupt, attempt automatic restoration of the
+# original complete boot partition from the validated dump.
 ui_print "Verifying boot partition write on $BLOCK...";
 if [ ! -s "$AKHOME/boot-new.img" ]; then
-  abort "AnyKernel output missing: $AKHOME/boot-new.img; boot write NOT confirmed.";
+  abort "AnyKernel output missing; boot write NOT confirmed.";
 fi;
 if [ ! -b "$BLOCK" ]; then
   abort "Boot device not accessible as block device; write NOT confirmed.";
 fi;
 verify_size=$(wc -c < "$AKHOME/boot-new.img");
-if [ "$verify_size" -lt 1048576 ]; then
-  abort "Unexpectedly small repacked boot image. Installation NOT confirmed.";
+if [ "$verify_size" -lt 1048576 ] || [ "$verify_size" -gt "$boot_backup_size" ]; then
+  abort "Unexpected repacked boot size. Installation NOT confirmed.";
 fi;
 verify_blocks=$(( (verify_size + 4095) / 4096 ));
 verify_expected=$(sha256sum "$AKHOME/boot-new.img" | cut -d' ' -f1);
 sync;
 verify_actual=$(dd if="$BLOCK" bs=4096 count="$verify_blocks" 2>/dev/null | head -c "$verify_size" | sha256sum | cut -d' ' -f1);
 if [ -z "$verify_actual" ] || [ "$verify_expected" != "$verify_actual" ]; then
-  abort "BOOT READBACK MISMATCH: partition does not match image. Restore boot backup before reboot.";
+  ui_print "BOOT READBACK MISMATCH. Trying to restore original boot...";
+  if [ -s "$BOOTIMG" ] && [ "$(sha256sum "$BOOTIMG" | cut -d' ' -f1)" = "$boot_backup_sha256" ]; then
+    if dd if="$BOOTIMG" of="$BLOCK" bs=4096 2>/dev/null; then
+      sync;
+      restore_blocks=$(( (boot_backup_size + 4095) / 4096 ));
+      restore_actual=$(dd if="$BLOCK" bs=4096 count="$restore_blocks" 2>/dev/null | head -c "$boot_backup_size" | sha256sum | cut -d' ' -f1);
+      if [ "$restore_actual" = "$boot_backup_sha256" ]; then
+        abort "New kernel NOT installed. ORIGINAL boot restored and SHA-256 verified.";
+      fi;
+    fi;
+  fi;
+  abort "CRITICAL: boot readback failed AND original restoration was not verified. Stay in recovery; restore external boot backup.";
 fi;
 ui_print "PASS: written boot image matches (SHA-256).";
 '''
-path.write_text(content.replace(anchor,anchor+verify+"\n",1))
+content = content.replace(dump_anchor, dump_anchor + preflight + "\n", 1)
+content = content.replace(write_anchor, write_anchor + verify + "\n", 1)
+path.write_text(content)
 PY
-printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256_ACTUAL_AKHOME_PATH\nINSTALLER_FIXED_VERSION=2\n' >> "$AK/BUILD-MANIFEST.txt"
+printf '\nINSTALLER_BOOT_READBACK_VERIFICATION=SHA256_WITH_PRECHECK_AND_RESTORE\nINSTALLER_FIXED_VERSION=3\n' >> "$AK/BUILD-MANIFEST.txt"
 ZIP="$OUT/ZeroTwo-ReSukiSU-SUSFS230-NoMount22-vince-UNTESTED.zip"
 (cd "$AK" && zip -qr9 "$ZIP" . -x '.git/*' '.git/**' '*.zip')
 unzip -tq "$ZIP"
