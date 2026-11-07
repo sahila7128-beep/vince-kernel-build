@@ -61,6 +61,10 @@ def kernel_trust(header):
         pat=r'^#define\s+EXPECTED_HASH_'+re.escape(name)+r'\s*\\?\s*\n\s*"([0-9a-fA-F]{64})"'
         m=re.search(pat,data,re.M)
         if m: ret[name]=(int(size,0),m.group(1).lower())
+    custom_size=re.search(r"^#define\s+EXPECTED_SIZE\s+(0x[0-9a-fA-F]+|\d+)",data,re.M)
+    custom_hash=re.search(r'^#define\s+EXPECTED_HASH\s*\\?\s*\n\s*"([0-9a-fA-F]{64})"',data,re.M)
+    if custom_size and custom_hash:
+        ret["VINCE_CUSTOM"]=(int(custom_size.group(1),0),custom_hash.group(1).lower())
     if "RESUKISU" not in ret: raise ValueError("unknown trust-list format")
     return ret
 
