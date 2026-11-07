@@ -196,7 +196,7 @@ done
 echo "[+] Generate native kernel compile.h for root preflight"
 make O=out ARCH=arm64 CC=clang-14 CROSS_COMPILE="$CROSS_COMPILE" \
  CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32" CLANG_TRIPLE="$CLANG_TRIPLE" \
- include/generated/compile.h
+ init/version.o
 test -s out/include/generated/compile.h
 
 echo "[+] Preflight ReSukiSU kernel objects (faster diagnosis)"
