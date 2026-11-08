@@ -71,6 +71,8 @@ jobs:
           chmod +x ./gradlew
           # The upstream wrapper hardcodes 10 seconds; GitHub network download can exceed it.
           sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
+          # Official direct Gradle CDN avoids unreliable services.gradle.org redirect.
+          sed -i 's#services.gradle.org/distributions#downloads.gradle.org/distributions#' gradle/wrapper/gradle-wrapper.properties
           # Maven Central / JetBrains release CDN occasionally returns 504.
           # Retry dependency-resolution failures; fail if compilation still fails.
           for attempt in 1 2 3; do
