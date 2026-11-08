@@ -26,12 +26,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install source-pinned Android components
+      - name: Use preinstalled Android SDK on GitHub runner
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
+          set -euo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          command -v sdkmanager
+          sdkmanager --version
           sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724" "cmake;3.22.1"
           echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.3.13750724" >> "$GITHUB_ENV"
 
