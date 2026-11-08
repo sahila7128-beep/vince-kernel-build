@@ -95,13 +95,40 @@ jobs:
           unzip -t out/TEESimulator-RS-*-Release.zip | tail -2
           sha256sum out/TEESimulator-RS-*-Release.zip
 
-      - name: Checkout official AlwaysStrong v1.0.5
+      - name: Archive successfully compiled corrected engine
         run: |
-          git clone --depth 1 --branch v1.0.5 https://github.com/evoker0/AlwaysStrong.git alwaysstrong
-          grep -q -- '--tee-file' alwaysstrong/build.sh
-          test -f alwaysstrong/module-variants/inject/build.conf
+          set -euo pipefail
+          mkdir -p engine-artifact
+          engine="$(find tee-src/out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
+          test -f "$engine"
+          unzip -t "$engine" | tail -2
+          cp "$engine" engine-artifact/
+          (cd engine-artifact && sha256sum *.zip > SHA256SUMS.txt)
+          printf '%s\n' 'ENGINE ONLY: DO NOT INSTALL BESIDE ALWAYSSTRONG. It must be integrated into your original official AlwaysStrong [Inject] v1.0.5 ZIP. NO KERNEL HERE. This is an untested experiment.' > engine-artifact/NOT_AN_INSTALLER.txt
+
+      - name: Upload patched engine only (not user-installable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: VINCE-OAEP-SHA1-PATCHED-ENGINE-ONLY
+          path: engine-artifact/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Check availability of official AlwaysStrong v1.0.5 source
+        id: official
+        run: |
+          if git clone --depth 1 --branch v1.0.5 https://github.com/evoker0/AlwaysStrong.git alwaysstrong; then
+            test -f alwaysstrong/module-variants/inject/build.conf
+            grep -q -- '--tee-file' alwaysstrong/build.sh
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::warning::Official AlwaysStrong v1.0.5 source is unavailable; only verified engine artifact will be uploaded. DO NOT install engine as a second module.'
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build patched AlwaysStrong Inject trial
+        if: steps.official.outputs.available == 'true'
         run: |
           set -euo pipefail
           tee_zip="$(find "$GITHUB_WORKSPACE/tee-src/out" -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
@@ -115,6 +142,7 @@ jobs:
           cp "$built" "$GITHUB_WORKSPACE/trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip"
 
       - name: Verify ZIP format and mandatory assets
+        if: steps.official.outputs.available == 'true'
         run: |
           set -euo pipefail
           trial='trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip'
@@ -130,6 +158,7 @@ jobs:
           } || true
 
       - name: Upload trial artifact (no automatic device install)
+        if: steps.official.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Vince-AlwaysStrong-v1_0_5-Inject-OAEPFIX-TRIAL
