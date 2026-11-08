@@ -71,7 +71,19 @@ jobs:
           chmod +x ./gradlew
           # The upstream wrapper hardcodes 10 seconds; GitHub network download can exceed it.
           sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
-          ./gradlew zipRelease --no-daemon -Dorg.gradle.jvmargs=-Xmx3072m
+          # Maven Central / JetBrains release CDN occasionally returns 504.
+          # Retry dependency-resolution failures; fail if compilation still fails.
+          for attempt in 1 2 3; do
+            echo "Gradle build attempt $attempt/3"
+            if ./gradlew zipRelease --no-daemon -Dorg.gradle.jvmargs=-Xmx3072m; then
+              break
+            fi
+            if [[ "$attempt" == 3 ]]; then
+              echo "ERROR: Gradle failed three consecutive attempts" >&2
+              exit 1
+            fi
+            sleep 12
+          done
           test -n "$(find out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
           unzip -t out/TEESimulator-RS-*-Release.zip | tail -2
           sha256sum out/TEESimulator-RS-*-Release.zip
