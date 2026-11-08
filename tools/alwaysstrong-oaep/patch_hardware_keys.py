@@ -35,6 +35,11 @@ PATCH = '''                // VINCE_KEYSTORE_HARDWARE_KEYS: Non-attested crypto 
                         attestationKey == null &&
                         !hasDeviceIdAttestation
                 ) {
+                    // The same alias may previously have been software-generated.
+                    // Evict its synthetic/patch cache before issuing a new
+                    // hardware generateKey or getKeyEntry would return stale
+                    // software key metadata despite the real HAL replacement.
+                    cleanupKeyData(KeyIdentifier(callingUid, keyDescriptor.alias))
                     logProbe("VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE")
                     return TransactionResult.ContinueAndSkipPost
                 }
