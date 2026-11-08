@@ -1,0 +1,91 @@
+name: Publish DIRECT ZIP download - Vince TEE Engineering TRIAL
+
+on:
+  push:
+    branches:
+      - test/tee-preserve-hardware-keys-vince
+    paths:
+      - '.github/workflows/publish-vince-tee-trial.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - name: Check out evidence / release notes
+        uses: actions/checkout@v4
+
+      - name: Download exact already-built and tested artifact (no rebuild)
+        uses: actions/download-artifact@v4
+        with:
+          name: VINCE-TEE-HARDWARE-KEYS-TRIAL-NOT-DEVICE-TESTED
+          repository: sahila7128-beep/vince-kernel-build
+          run-id: 42520721994
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release
+
+      - name: Verify complete module ZIP with original source-build digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          inner='release/Vince-AlwaysStrong-Inject-v1.0.5-HARDWARE-KEYS-TRIAL.zip'
+          test -f "$inner"
+          echo "317fb0fcbc014cdb1952d931f377eb02a03adc00136184970588f5ede6ff95fb  $inner" | sha256sum -c -
+          unzip -t "$inner" | tail -2
+          test "$(unzip -p "$inner" module.prop | grep -c '^id=tricky_store$')" -eq 1
+          unzip -p "$inner" module.prop | grep -Fxq 'name=AlwaysStrong [Inject]'
+          unzip -p "$inner" module.prop | grep -Fxq 'version=v1.0.5'
+          unzip -p "$inner" tee_classes.dex | strings | grep -q 'VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE'
+          test -f release/SHA256SUMS.txt
+          grep -Fq '317fb0fcbc014cdb1952d931f377eb02a03adc00136184970588f5ede6ff95fb' release/SHA256SUMS.txt
+          # Prevent GitHub release from including private config / keybox contents.
+          test ! -e release/keybox.xml
+          test ! -e release/private.pem
+          echo "SHA-256 and 18-test workflow source run 42520721994 validated."
+
+      - name: Write prominent trial-only notes
+        shell: bash
+        run: |
+          cat > release/DOWNLOAD_AND_TEST_INFO.txt <<'EOF'
+          EXPERIMENTAL — NOT A VERIFIED FIX FOR ALL APPS OR HARDWARE TEE.
+          Only for Xiaomi Redmi 5 Plus Vince with existing FinaSU compatibility.
+          This is the INNER module ZIP, not a boot/kernel image.
+          Engine PR76 v308 + surgical patch to preserve hardware Keymaster
+          for all ordinary non-attestation cryptographic keys.
+          ONLY original tee_classes.dex changed vs previous PR76 candidate.
+          No changes to Zygisk Inject / AlwaysStrong scripts / keybox / kernel.
+          Build, unit tests, ZIP contents and checksums PASSED offline.
+          Device startup, STRONG integrity, app crashes and physical TEE: NOT TESTED.
+          Keep bootable RC3 kernel; retain old module ZIP and backup data.
+          Do not remove/revoke/regenerate Android Keystore keys.
+          SHA-256:
+          317fb0fcbc014cdb1952d931f377eb02a03adc00136184970588f5ede6ff95fb
+          Source: https://github.com/sahila7128-beep/vince-kernel-build/tree/test/tee-preserve-hardware-keys-vince
+          Build: https://github.com/sahila7128-beep/vince-kernel-build/actions/runs/42520721994
+          EOF
+
+      - name: Publish unvalidated module as clearly labeled GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='vince-tee-hardware-keys-trial-20261109'
+          inner='release/Vince-AlwaysStrong-Inject-v1.0.5-HARDWARE-KEYS-TRIAL.zip'
+          if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "$tag" "$inner" release/DOWNLOAD_AND_TEST_INFO.txt --clobber --repo "${GITHUB_REPOSITORY}"
+          else
+            gh release create "$tag" "$inner" release/DOWNLOAD_AND_TEST_INFO.txt \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "test/tee-preserve-hardware-keys-vince" \
+              --title "VINCE TEE Hardware Keys — ENGINEERING TRIAL (not device validated)" \
+              --notes-file release/DOWNLOAD_AND_TEST_INFO.txt \
+              --prerelease
+          fi
+          gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json url,assets,isPrerelease
