@@ -1,0 +1,105 @@
+name: Vince TEE PR76 DEX-only compatibility test (no kernel)
+
+on:
+  push:
+    branches: [test/tee-v308-dex-only-vince]
+    paths:
+      - ".github/workflows/tee-pr76-dex-only-vince.yml"
+      - "tools/alwaysstrong-oaep/repack_dexonly.py"
+      - "tools/alwaysstrong-oaep/test_repack_dexonly.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout patch and execute offline guard tests
+        uses: actions/checkout@v4
+
+      - name: Unit test ZIP integrity invariants
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/alwaysstrong-oaep -p 'test_*.py' -v
+
+      - name: Get independently tested upstream PR76 engine release (adamaru)
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          curl -fL --retry 4 --retry-delay 5 --connect-timeout 25 \
+            "https://github.com/adamaru/TEESimulator-RS/releases/download/v6.0.1-308/TEESimulator-RS-v6.0.1-308-Release.zip" \
+            -o evidence/TEESimulator-RS-v6.0.1-308-Release.zip
+          echo "685e28eabc37e0f73a20a0c0078f746b0756bc2ce07a116e80c1d3d0fa4fd0ba  evidence/TEESimulator-RS-v6.0.1-308-Release.zip" | sha256sum -c -
+          unzip -t evidence/TEESimulator-RS-v6.0.1-308-Release.zip | tail -2
+          unzip -p evidence/TEESimulator-RS-v6.0.1-308-Release.zip classes.dex | sha256sum | tee evidence/dex-sha.txt
+          grep -q '^453744e949d8bd9013a76916c2579004e73ec0eddf59cacd9a62f29ea9271d7c' evidence/dex-sha.txt
+
+      - name: Recover previously built unchanged v307 engine from verified GitHub artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VINCE-OAEP-SHA1-PATCHED-ENGINE-ONLY
+          repository: sahila7128-beep/vince-kernel-build
+          run-id: 42472688025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/old-engine
+
+      - name: Verify the v307 engine and pin original AlwaysStrong upstream source
+        run: |
+          set -euo pipefail
+          old="$(find evidence/old-engine -type f -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
+          test -n "$old"
+          echo "f3363625f0fd463eccf1d44daf007bda609fb372e94d61943f43492c5a300c63  $old" | sha256sum -c -
+          echo "OLD_ENGINE=$GITHUB_WORKSPACE/$old" >> "$GITHUB_ENV"
+          git clone --depth 1 --branch main https://github.com/Guxin12/AlwaysStrong.git alwaysstrong
+          test "$(git -C alwaysstrong rev-parse HEAD)" = "54c2a70552bc477436e157fd3c6cbd8d43c0e897"
+          grep -qx 'version=v1.0.5' alwaysstrong/module/module.prop
+          grep -q 'PIF_TAG="v4.9-inject-s"' alwaysstrong/module-variants/inject/build.conf
+
+      - name: Reconstruct v1.0.5 Inject base unchanged except already pinned engine
+        run: |
+          set -euo pipefail
+          cd alwaysstrong
+          bash build.sh --variant inject --tee-file "$OLD_ENGINE"
+          test -f out/AlwaysStrong-v1.0.5-inject.zip
+          sha256sum out/AlwaysStrong-v1.0.5-inject.zip
+          cd "$GITHUB_WORKSPACE"
+          test "$(sha256sum alwaysstrong/out/AlwaysStrong-v1.0.5-inject.zip | cut -d' ' -f1)" = "c7fa9d1bef285f17196a47addd92dc8a0a5cba490dfbe3f2aa183d37a191f0f9"
+
+      - name: Replace ONLY TEE bytecode with PR76 SHA-verified v308; leave all else identical
+        run: |
+          set -euo pipefail
+          mkdir -p trial
+          python3 tools/alwaysstrong-oaep/repack_dexonly.py \
+            --original alwaysstrong/out/AlwaysStrong-v1.0.5-inject.zip \
+            --v308 evidence/TEESimulator-RS-v6.0.1-308-Release.zip \
+            --output trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip
+          unzip -t trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip | tail -2
+          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip tee_classes.dex | sha256sum | grep '^453744e949d8bd9013a76916c2579004e73ec0eddf59cacd9a62f29ea9271d7c'
+          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip module.prop | grep -qx 'name=AlwaysStrong [Inject]'
+          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip module.prop | grep -qx 'version=v1.0.5'
+          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip service.sh | grep -q 'as_on auto_keybox'
+          sha256sum trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip > trial/SHA256SUMS.txt
+          cat > trial/README-FIRST.txt <<'EOF'
+          INVESTIGATION/REGRESSION TEST ONLY. DO NOT INSTALL BLINDLY.
+          Source: AlwaysStrong upstream history v1.0.5, git SHA 54c2a70552bc477436e157fd3c6cbd8d43c0e897.
+          Inject PIF v4.9. TEE v308 source PR #76 is NOT YET MERGED by main developer.
+          Original file tee_classes.dex is the ONLY existing file replaced.
+          All native libraries, Zygisk, scripts, module.prop, keybox and root files unchanged.
+          This does NOT establish genuine hardware-backed key attestation.
+          Do not install on an unstable phone; preserve old official module and recovery.
+          Exact device app-crash evidence and strong-integrity regression comparison are still pending.
+          NO KERNEL FILE IS INCLUDED.
+          EOF
+
+      - name: Upload source-verified candidate NOT APPROVED FOR DEVICE INSTALL
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vince-TEE-PR76-DEXONLY-ENGINEERING-CANDIDATE
+          path: trial/
+          retention-days: 30
+          compression-level: 0
+          if-no-files-found: error
