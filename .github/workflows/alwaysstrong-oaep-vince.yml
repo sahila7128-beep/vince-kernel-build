@@ -71,8 +71,13 @@ jobs:
           chmod +x ./gradlew
           # The upstream wrapper hardcodes 10 seconds; GitHub network download can exceed it.
           sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
-          # Official direct Gradle CDN avoids unreliable services.gradle.org redirect.
-          sed -i 's#services.gradle.org/distributions#downloads.gradle.org/distributions#' gradle/wrapper/gradle-wrapper.properties
+          # The official large download returns HTTP 504 on this runner.
+          # Read the SHA-256 from official Gradle first, then pin it in wrapper.
+          expected="$(curl -fsSL --retry 3 --retry-delay 3 https://services.gradle.org/distributions/gradle-9.2.0-bin.zip.sha256 | tr -d '[:space:]')"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid official checksum' >&2; exit 1; }
+          echo "distributionSha256Sum=$expected" >> gradle/wrapper/gradle-wrapper.properties
+          # Verified alternative mirror for Gradle distribution bytes only.
+          sed -i 's#services.gradle.org/distributions#mirrors.aliyun.com/github/releases/gradle/gradle-distributions/v9.2.0#' gradle/wrapper/gradle-wrapper.properties
           # Maven Central / JetBrains release CDN occasionally returns 504.
           # Retry dependency-resolution failures; fail if compilation still fails.
           for attempt in 1 2 3; do
