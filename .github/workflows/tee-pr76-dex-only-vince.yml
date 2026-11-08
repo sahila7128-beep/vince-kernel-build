@@ -99,7 +99,7 @@ jobs:
             --output trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip
           unzip -t trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip | tail -2
           unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip tee_classes.dex | sha256sum | grep '^453744e949d8bd9013a76916c2579004e73ec0eddf59cacd9a62f29ea9271d7c'
-          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip module.prop | grep -qx 'name=AlwaysStrong [Inject]'
+          unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip module.prop | grep -Fqx 'name=AlwaysStrong [Inject]'
           unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip module.prop | grep -qx 'version=v1.0.5'
           unzip -p trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip service.sh | grep -q 'as_on auto_keybox'
           sha256sum trial/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip > trial/SHA256SUMS.txt
