@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vince-oaep-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-oaep-trial:
     runs-on: ubuntu-22.04
@@ -19,6 +23,9 @@ jobs:
     steps:
       - name: Checkout Vince patch harness
         uses: actions/checkout@v4
+
+      - name: Unit-test fail-closed repacking before any build
+        run: python3 -m unittest discover -s tools/alwaysstrong-oaep -p 'test_*.py' -v
 
       - name: Setup JDK 21 for upstream Gradle
         uses: actions/setup-java@v4
@@ -48,7 +55,8 @@ jobs:
       - name: Checkout pinned TEESimulator-RS (official upstream)
         run: |
           git clone --depth 1 --branch v6.0.1-307 --recurse-submodules https://github.com/Enginex0/TEESimulator-RS.git tee-src
-          git -C tee-src rev-parse HEAD
+          actual="$(git -C tee-src rev-parse HEAD)"
+          test "$actual" = "6d241e56d6e8146cd67ed4ac3dadc9c632969549"
           test -e tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/SoftwareOperation.kt
 
       - name: Patch only missing MGF1 digest fallback
