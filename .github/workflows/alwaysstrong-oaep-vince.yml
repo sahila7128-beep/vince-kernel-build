@@ -69,6 +69,8 @@ jobs:
         working-directory: tee-src
         run: |
           chmod +x ./gradlew
+          # The upstream wrapper hardcodes 10 seconds; GitHub network download can exceed it.
+          sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
           ./gradlew zipRelease --no-daemon -Dorg.gradle.jvmargs=-Xmx3072m
           test -n "$(find out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
           unzip -t out/TEESimulator-RS-*-Release.zip | tail -2
