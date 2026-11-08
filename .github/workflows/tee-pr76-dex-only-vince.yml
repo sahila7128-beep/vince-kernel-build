@@ -59,6 +59,22 @@ jobs:
           grep -qx 'version=v1.0.5' alwaysstrong/module/module.prop
           grep -q 'PIF_TAG="v4.9-inject-s"' alwaysstrong/module-variants/inject/build.conf
 
+      - name: Match the earlier known-good reproducible module build toolchain
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" "ndk;27.3.13750724"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.3.13750724" >> "$GITHUB_ENV"
+
+      - name: Install pinned Android Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk for AlwaysStrong native watcher/fetcher
+        run: cargo install cargo-ndk --locked
+
       - name: Reconstruct v1.0.5 Inject base unchanged except already pinned engine
         run: |
           set -euo pipefail
