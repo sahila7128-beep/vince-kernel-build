@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+from copy import copy
 import re
 import stat
 from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
@@ -131,7 +132,7 @@ def repack(original: Path, engine: Path, output: Path) -> dict:
                 if data is None:
                     data = orig.read(item)
                 # ZipInfo from original preserves permissions/relative paths.
-                out.writestr(item, data)
+                out.writestr(copy(item), data)
             out.writestr("VINCE_OAEP_TRIAL_README.txt", marker, compress_type=ZIP_DEFLATED)
         final_entries, result = safe_zip(output)
         try:
