@@ -123,20 +123,22 @@ jobs:
           retention-days: 30
           compression-level: 0
 
-      - name: Check availability of official AlwaysStrong v1.0.5 source
-        id: official
+      - name: Checkout exact v1.0.5 upstream commit from preserved GitHub fork
         run: |
-          if git clone --depth 1 --branch v1.0.5 https://github.com/evoker0/AlwaysStrong.git alwaysstrong; then
-            test -f alwaysstrong/module-variants/inject/build.conf
-            grep -q -- '--tee-file' alwaysstrong/build.sh
-            echo 'available=true' >> "$GITHUB_OUTPUT"
-          else
-            echo '::warning::Official AlwaysStrong v1.0.5 source is unavailable; only verified engine artifact will be uploaded. DO NOT install engine as a second module.'
-            echo 'available=false' >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          # Parent: evoker0/AlwaysStrong; three independent forks retain this
+          # exact upstream git commit (identical SHA, not just version label).
+          git clone --depth 1 --branch main https://github.com/Guxin12/AlwaysStrong.git alwaysstrong
+          actual="$(git -C alwaysstrong rev-parse HEAD)"
+          test "$actual" = "54c2a70552bc477436e157fd3c6cbd8d43c0e897"
+          test -f alwaysstrong/module-variants/inject/build.conf
+          grep -q -- '--tee-file' alwaysstrong/build.sh
+          grep -qx 'version=v1.0.5' alwaysstrong/module/module.prop
+          grep -qx 'id=tricky_store' alwaysstrong/module/module.prop
+          grep -q 'PIF_TAG="v4.9-inject-s"' alwaysstrong/module-variants/inject/build.conf
+          echo 'Source pinned to original upstream v1.0.5 commit.'
 
       - name: Build patched AlwaysStrong Inject trial
-        if: steps.official.outputs.available == 'true'
         run: |
           set -euo pipefail
           tee_zip="$(find "$GITHUB_WORKSPACE/tee-src/out" -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
@@ -147,10 +149,13 @@ jobs:
           built="$(find out -maxdepth 1 -type f -name '*inject*.zip' -print -quit)"
           test -n "$built"
           mkdir -p "$GITHUB_WORKSPACE/trial"
-          cp "$built" "$GITHUB_WORKSPACE/trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip"
+          cd "$GITHUB_WORKSPACE"
+          python3 tools/alwaysstrong-oaep/repack_engine.py \
+            --original "$GITHUB_WORKSPACE/alwaysstrong/$built" \
+            --engine "$tee_zip" \
+            --output "$GITHUB_WORKSPACE/trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip"
 
       - name: Verify ZIP format and mandatory assets
-        if: steps.official.outputs.available == 'true'
         run: |
           set -euo pipefail
           trial='trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip'
@@ -166,7 +171,6 @@ jobs:
           } || true
 
       - name: Upload trial artifact (no automatic device install)
-        if: steps.official.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Vince-AlwaysStrong-v1_0_5-Inject-OAEPFIX-TRIAL
