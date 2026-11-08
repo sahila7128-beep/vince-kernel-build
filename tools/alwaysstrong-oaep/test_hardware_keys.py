@@ -37,6 +37,8 @@ class TestSourcePatch(unittest.TestCase):
         src=(self.root/patcher.REL).read_text()
         self.assertEqual(hashlib.sha256(src.encode()).hexdigest(),hashv)
         self.assertIn("VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE",src)
+        self.assertIn("cleanupKeyData(KeyIdentifier(callingUid, keyDescriptor.alias))",src)
+        self.assertLess(src.index("cleanupKeyData(KeyIdentifier(callingUid, keyDescriptor.alias))"),src.index("VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE"))
         self.assertLess(src.index("VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE"),src.index("doSoftwareKeyGen()"))
         self.assertIn("parsedParams.attestationChallenge == null",src)
         self.assertIn("!isAttestKeyRequest",src)
