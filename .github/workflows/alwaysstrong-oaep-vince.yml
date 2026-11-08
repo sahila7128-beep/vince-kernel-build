@@ -1,0 +1,117 @@
+name: Vince AlwaysStrong OAEP MGF1 SHA1 trial
+
+on:
+  push:
+    branches:
+      - test/alwaysstrong-oaep-vince
+    paths:
+      - 'tools/alwaysstrong-oaep/**'
+      - '.github/workflows/alwaysstrong-oaep-vince.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-oaep-trial:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Vince patch harness
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21 for upstream Gradle
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install source-pinned Android components
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.3.13750724" >> "$GITHUB_ENV"
+
+      - name: Install Rust and Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: |
+          command -v cargo-ndk || cargo install cargo-ndk --locked
+
+      - name: Checkout pinned TEESimulator-RS (official upstream)
+        run: |
+          git clone --depth 1 --branch v6.0.1-307 --recurse-submodules https://github.com/Enginex0/TEESimulator-RS.git tee-src
+          git -C tee-src rev-parse HEAD
+          test -e tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/SoftwareOperation.kt
+
+      - name: Patch only missing MGF1 digest fallback
+        run: |
+          python3 tools/alwaysstrong-oaep/patch_engine.py tee-src
+          git -C tee-src diff --check
+          git -C tee-src diff -- app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/SoftwareOperation.kt
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/SoftwareOperation.kt')
+          s=p.read_text()
+          assert '                    } ?: "SHA-1"' in s
+          assert '                    } ?: mainDigest' not in s
+          print('PASS: source regression check for MGF1 SHA-1 default')
+          PY
+
+      - name: Compile patched TEESimulator-RS release ZIP
+        working-directory: tee-src
+        run: |
+          chmod +x ./gradlew
+          ./gradlew zipRelease --no-daemon -Dorg.gradle.jvmargs=-Xmx3072m
+          test -n "$(find out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
+          unzip -t out/TEESimulator-RS-*-Release.zip | tail -2
+          sha256sum out/TEESimulator-RS-*-Release.zip
+
+      - name: Checkout official AlwaysStrong v1.0.5
+        run: |
+          git clone --depth 1 --branch v1.0.5 https://github.com/evoker0/AlwaysStrong.git alwaysstrong
+          grep -q -- '--tee-file' alwaysstrong/build.sh
+          test -f alwaysstrong/module-variants/inject/build.conf
+
+      - name: Build patched AlwaysStrong Inject trial
+        run: |
+          set -euo pipefail
+          tee_zip="$(find "$GITHUB_WORKSPACE/tee-src/out" -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -print -quit)"
+          test -f "$tee_zip"
+          cd alwaysstrong
+          bash ./build.sh --variant inject --tee-file "$tee_zip"
+          find out -maxdepth 1 -type f -name '*inject*.zip' -print
+          built="$(find out -maxdepth 1 -type f -name '*inject*.zip' -print -quit)"
+          test -n "$built"
+          mkdir -p "$GITHUB_WORKSPACE/trial"
+          cp "$built" "$GITHUB_WORKSPACE/trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip"
+
+      - name: Verify ZIP format and mandatory assets
+        run: |
+          set -euo pipefail
+          trial='trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip'
+          unzip -t "$trial" | tail -2
+          unzip -Z1 "$trial" | grep -qx 'tee_classes.dex'
+          unzip -Z1 "$trial" | grep -qx 'module.prop'
+          unzip -Z1 "$trial" | grep -q '^lib/arm64-v8a/.*[.]so$'
+          unzip -p "$trial" module.prop | grep -q '^id=tricky_store'
+          sha256sum "$trial" | tee trial/SHA256SUMS.txt
+          printf '%s\n' 'SOURCE PATCH BUILT; NOT TESTED ON REDMI 5 PLUS. NO KERNEL INCLUDED.' > trial/READ_BEFORE_INSTALL.txt
+          unzip -Z1 "$trial" | grep -E '(boot[.]img|Image|dtb|kernel)' && {
+            echo 'ERROR: unexpected kernel image in module artifact'; exit 1;
+          } || true
+
+      - name: Upload trial artifact (no automatic device install)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vince-AlwaysStrong-v1_0_5-Inject-OAEPFIX-TRIAL
+          path: trial/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
