@@ -1,0 +1,143 @@
+name: Vince TEE preserve genuine hardware keys (DEX-only)
+
+on:
+  push:
+    branches: [test/tee-preserve-hardware-keys-vince]
+    paths:
+      - '.github/workflows/tee-hardware-keys-vince.yml'
+      - 'tools/alwaysstrong-oaep/patch_hardware_keys.py'
+      - 'tools/alwaysstrong-oaep/repack_hardware_keys.py'
+      - 'tools/alwaysstrong-oaep/test_hardware_keys.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: vince-preserve-hardware-keys-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout Vince patch source
+        uses: actions/checkout@v4
+
+      - name: Test dispatch guard and full ZIP per-file byte preservation
+        run: python3 -m unittest discover -s tools/alwaysstrong-oaep -p 'test_*.py' -v
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Prepare pinned Android SDK and NDK
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.3.13750724" >> "$GITHUB_ENV"
+
+      - name: Set up Rust targets for TEESimulator native support
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Clone contributor's exact PR76 v308 release tree
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v6.0.1-308 --recurse-submodules https://github.com/adamaru/TEESimulator-RS.git tee-src
+          test "$(git -C tee-src rev-parse HEAD)" = "f0cbd00e40e64b858f9801ee69db6cf4b9db6fdc"
+          test -f tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/AuthorizeCreate.kt
+          grep -q 'unsupportedMgfDigest' tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/AuthorizeCreate.kt
+
+      - name: Patch only non-attested key generation to use original hardware
+        run: |
+          set -euo pipefail
+          python3 tools/alwaysstrong-oaep/patch_hardware_keys.py tee-src
+          git -C tee-src diff --check
+          test "$(git -C tee-src diff --name-only | wc -l)" -eq 1
+          git -C tee-src diff --name-only | grep -Fx 'app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/KeyMintSecurityLevelInterceptor.kt'
+          git -C tee-src diff -- app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/KeyMintSecurityLevelInterceptor.kt | tee hardware-key-source-diff.txt
+          grep -q 'VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE' tee-src/app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/KeyMintSecurityLevelInterceptor.kt
+
+      - name: Build updated TEESimulator v308 ZIP
+        working-directory: tee-src
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          sed -i 's/^networkTimeout=.*/networkTimeout=120000/' gradle/wrapper/gradle-wrapper.properties
+          expected="$(curl -fsSL --retry 3 --retry-delay 3 https://services.gradle.org/distributions/gradle-9.2.0-bin.zip.sha256 | tr -d '[:space:]')"
+          [[ "$expected" =~ ^[0-9a-f]{64}$ ]]
+          grep -q '^distributionSha256Sum=' gradle/wrapper/gradle-wrapper.properties || echo "distributionSha256Sum=$expected" >> gradle/wrapper/gradle-wrapper.properties
+          sed -i 's#services.gradle.org/distributions#mirrors.aliyun.com/github/releases/gradle/gradle-distributions/v9.2.0#' gradle/wrapper/gradle-wrapper.properties
+          for n in 1 2 3; do
+            if ./gradlew zipRelease --no-daemon -Dorg.gradle.jvmargs=-Xmx3072m; then break; fi
+            if [ "$n" -eq 3 ]; then exit 1; fi
+            sleep 12
+          done
+          z="$(find out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -type f -print -quit)"
+          test -n "$z"
+          unzip -t "$z" | tail -2
+          unzip -p "$z" classes.dex | strings | grep -q 'VINCE_PASS_NON_ATTESTED_KEY_TO_HARDWARE'
+          sha256sum "$z"
+
+      - name: Download EXACT previously built PR76 Inject module as baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: Vince-TEE-PR76-DEXONLY-ENGINEERING-CANDIDATE
+          repository: sahila7128-beep/vince-kernel-build
+          run-id: 42479979239
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: baseline
+
+      - name: Fail closed if baseline was substituted
+        run: |
+          set -euo pipefail
+          baseline='baseline/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip'
+          test -f "$baseline"
+          echo "5d1bd0ee2130674786752d9e2cf9fb9f01b3967f0a605b96adb670309a0befdb  $baseline" | sha256sum -c -
+          unzip -t "$baseline" | tail -2
+
+      - name: Replace ONLY TEE DEX; independently compare every file
+        run: |
+          set -euo pipefail
+          engine="$(find tee-src/out -maxdepth 1 -name 'TEESimulator-RS-*-Release.zip' -type f -print -quit)"
+          test -n "$engine"
+          mkdir -p trial
+          python3 tools/alwaysstrong-oaep/repack_hardware_keys.py \
+            --baseline baseline/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip \
+            --engine "$engine" \
+            --output trial/Vince-AlwaysStrong-Inject-v1.0.5-HARDWARE-KEYS-TRIAL.zip
+          unzip -t trial/Vince-AlwaysStrong-Inject-v1.0.5-HARDWARE-KEYS-TRIAL.zip | tail -2
+          sha256sum trial/Vince-AlwaysStrong-Inject-v1.0.5-HARDWARE-KEYS-TRIAL.zip > trial/SHA256SUMS.txt
+          cp hardware-key-source-diff.txt trial/SOURCE-DELTA.txt
+          cat > trial/READ-FIRST.txt <<'EOF'
+          UNVERIFIED ENGINEERING CANDIDATE - NOT A GUARANTEED TEE FIX.
+          This is NOT a kernel flash package. Keep Vince C12 RC3 unchanged.
+          Compared to exact previous PR76 Inject v1.0.5, the ONLY
+          original ZIP file modified is tee_classes.dex.
+          Difference: ordinary non-attested Keymaster keys remain hardware-made,
+          rather than software-generated when attestation AUTO falls back to GENERATE.
+          Existing attestation challenge, keybox and PIF behavior kept unchanged.
+          Untested in actual Redmi 5 Plus, Play Integrity or target apps.
+          If you use it, preserve prior original module and a recovery path.
+          No guarantee for apps enforcing authentic hardware attestation or locked bootloader.
+          EOF
+
+      - name: Upload engineering experiment (not phone validated)
+        uses: actions/upload-artifact@v4
+        with:
+          name: VINCE-TEE-HARDWARE-KEYS-TRIAL-NOT-DEVICE-TESTED
+          path: trial/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
