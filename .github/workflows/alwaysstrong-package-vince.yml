@@ -1,0 +1,106 @@
+name: Package AlwaysStrong Inject Vince from pinned, compiled engine
+
+on:
+  push:
+    branches: [test/alwaysstrong-oaep-vince]
+    paths:
+      - '.github/workflows/alwaysstrong-package-vince.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package-patched-official-source:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Vince integration code
+        uses: actions/checkout@v4
+
+      - name: Verify offline repacker before assembling
+        run: python3 -m unittest discover -s tools/alwaysstrong-oaep -p 'test_*.py' -v
+
+      - name: Download previously compiled and audited TEESimulator engine
+        uses: actions/download-artifact@v4
+        with:
+          name: VINCE-OAEP-SHA1-PATCHED-ENGINE-ONLY
+          repository: sahila7128-beep/vince-kernel-build
+          run-id: 42472688025
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: engine-artifact
+
+      - name: Verify engine SHA-256 from successful compile
+        run: |
+          set -euo pipefail
+          engine="$(find engine-artifact -name 'TEESimulator-RS-*-Release.zip' -type f -print -quit)"
+          test -n "$engine"
+          echo "f3363625f0fd463eccf1d44daf007bda609fb372e94d61943f43492c5a300c63  $engine" | sha256sum -c -
+          unzip -t "$engine" | tail -2
+          unzip -Z1 "$engine" | grep -qx 'classes.dex'
+          unzip -Z1 "$engine" | grep -q '^lib/arm64-v8a/.*[.]so$'
+          echo "ENGINE_PATH=$GITHUB_WORKSPACE/$engine" >> "$GITHUB_ENV"
+
+      - name: Retrieve upstream's exact v1.0.5 source from preserved fork
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main https://github.com/Guxin12/AlwaysStrong.git alwaysstrong
+          test "$(git -C alwaysstrong rev-parse HEAD)" = "54c2a70552bc477436e157fd3c6cbd8d43c0e897"
+          grep -qx 'version=v1.0.5' alwaysstrong/module/module.prop
+          grep -qx 'id=tricky_store' alwaysstrong/module/module.prop
+          grep -q 'PIF_TAG="v4.9-inject-s"' alwaysstrong/module-variants/inject/build.conf
+          test -f alwaysstrong/module/keybox_fetch.sh
+          grep -q 'as_on auto_keybox' alwaysstrong/module/service.sh
+
+      - name: Assemble original v1.0.5 Inject with patched engine
+        run: |
+          set -euo pipefail
+          cd alwaysstrong
+          bash ./build.sh --variant inject --tee-file "$ENGINE_PATH"
+          src="$(find out -maxdepth 1 -name '*-inject.zip' -type f -print -quit)"
+          test -n "$src"
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p trial
+          python3 tools/alwaysstrong-oaep/repack_engine.py \
+            --original "alwaysstrong/$src" \
+            --engine "$ENGINE_PATH" \
+            --output "trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip"
+
+      - name: Validate automatic keybox refresh survives, stop manager auto-replace
+        run: |
+          set -euo pipefail
+          trial='trial/Vince-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL.zip'
+          unzip -t "$trial" | tail -2
+          unzip -Z1 "$trial" | grep -qx 'keybox_fetch.sh'
+          unzip -p "$trial" service.sh | grep -q 'as_on auto_keybox'
+          unzip -p "$trial" engine.sh | grep -qx 'ENGINE=inject'
+          unzip -p "$trial" module.prop | grep -qx 'id=tricky_store'
+          unzip -p "$trial" module.prop | grep -q 'vince-oaep-sha1-TRIAL'
+          if unzip -p "$trial" module.prop | grep -q '^updateJson='; then
+            echo 'ERROR: untested trial would be overwritten by module auto-update'
+            exit 1
+          fi
+          unzip -Z1 "$trial" | grep -qx 'tee_classes.dex'
+          unzip -Z1 "$trial" | grep -q '^zygisk/'
+          unzip -Z1 "$trial" | grep -q '^lib/arm64-v8a/.*[.]so$'
+          sha256sum "$trial" > trial/SHA256SUMS.txt
+          cat > trial/README-TRIAL.txt <<'EOF'
+          SOURCE: AlwaysStrong Inject v1.0.5 upstream commit 54c2a70552bc477436e157fd3c6cbd8d43c0e897
+          ENGINE: TEESimulator-RS v6.0.1-307, one source fix: missing MGF1 digest defaults to SHA-1.
+          STATUS: PACKAGE BUILD VERIFIED, NOT DEVICE TESTED, NO CLAIM OF TWO DUCK DETECTOR RED FIXED.
+          Original kernel Vince-C12-RC3.zip NOT CHANGED / NOT INCLUDED.
+          Back up existing module ZIP, data, recovery access before testing.
+          Keybox auto-refresh scripts kept; manager updateJson omitted in trial to prevent
+          untested upstream upgrades replacing this patch. Review new upstream releases manually.
+          Only one AlwaysStrong package can be installed at a time.
+          EOF
+
+      - name: Upload module TRIAL
+        uses: actions/upload-artifact@v4
+        with:
+          name: VINCE-AlwaysStrong-v1.0.5-Inject-OAEPFIX-TRIAL
+          path: trial/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
