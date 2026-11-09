@@ -1,0 +1,83 @@
+name: Release one-click offline KAREPMU APK plus module inspector
+on:
+  push:
+    branches: [audit/karepmu-static-20261109]
+    paths:
+      - '.github/workflows/karepmu-static-release.yml'
+      - 'tools/karepmu-static/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate scripts and execute fixture without Android
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir = Join-Path $env:RUNNER_TEMP 'karepmu-fixture'
+          New-Item -Path $dir -ItemType Directory -Force | Out-Null
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $a=Join-Path $dir 'KAREPMU.apk'
+          $b=Join-Path $dir 'MODUL.zip'
+          $f=Join-Path $dir 'AndroidManifest.xml'
+          [IO.File]::WriteAllBytes($f, [Text.Encoding]::UTF8.GetBytes('<manifest package="example.test"/>'))
+          [IO.Compression.ZipFile]::CreateFromDirectory($dir,(Join-Path $env:RUNNER_TEMP 'temp-karepmu.zip'))
+          Move-Item (Join-Path $env:RUNNER_TEMP 'temp-karepmu.zip') $a
+          $src=Join-Path $env:RUNNER_TEMP 'mod-fixture-src'
+          New-Item -Path $src -ItemType Directory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $src 'module.prop') -Value "id=test_static_module"
+          Set-Content -LiteralPath (Join-Path $src 'service.sh') -Value "#!/system/bin/sh" 
+          [IO.Compression.ZipFile]::CreateFromDirectory($src,$b)
+          $cmd=Resolve-Path 'tools/karepmu-static/ANALISIS_KAREPMU_MODUL.ps1'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $cmd.Path -ApkPath $a -ModulePath $b
+          if($LASTEXITCODE -ne 0){throw "Scanner exit $LASTEXITCODE"}
+          $out='tools/karepmu-static/LAPORAN_KAREPMU_MODUL.txt'
+          if(-not (Test-Path $out)){throw "Missing generated report"}
+          $txt=Get-Content -Raw $out
+          if(-not $txt.Contains('test_static_module')){throw "Module content missing from report"}
+          if(-not $txt.Contains('DEX count')){throw "APK content check missing"}
+          Remove-Item -LiteralPath $out -Force
+          "PASS: offline, no-root inspector parsed both fixture archives."
+      - name: Static safety checks
+        shell: pwsh
+        run: |
+          $s=Get-Content -Raw 'tools/karepmu-static/ANALISIS_KAREPMU_MODUL.ps1'
+          foreach($unsafe in @('Invoke-WebRequest', 'Invoke-RestMethod', 'Start-Process adb', 'adb shell', 'su -c', 'Install-Package', 'Invoke-Expression')) {
+            if($s.Contains($unsafe)){throw "Review disallowed command: $unsafe"}
+          }
+          if(-not $s.Contains('ZipFile')){throw 'Not reading archives statically'}
+          'PASS: no download, install, root or remote execution.'
+
+  publish:
+    needs: test
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ZIP
+        run: |
+          set -euo pipefail
+          cd tools/karepmu-static
+          zip -9 -q "$GITHUB_WORKSPACE/ANALISIS_KAREPMU_MODUL_SATU_KLIK.zip" \
+            KLIK_2X_ANALISIS_KAREPMU.cmd ANALISIS_KAREPMU_MODUL.ps1 PETUNJUK.txt
+          cd "$GITHUB_WORKSPACE"
+          unzip -t ANALISIS_KAREPMU_MODUL_SATU_KLIK.zip
+          sha256sum ANALISIS_KAREPMU_MODUL_SATU_KLIK.zip
+      - name: Upload release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="karepmu-static-inspector-20261109"
+          gh release create "$tag" ANALISIS_KAREPMU_MODUL_SATU_KLIK.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --target audit/karepmu-static-20261109 \
+            --title "KAREPMU + MODUL: Offline One-Click APK ZIP Inspector" \
+            --notes "Static read-only inspector. Runs on Windows; no ADB, root, APK execution or ZIP flashing. Requires original KAREPMU.apk and MODUL.zip on Downloads; result LAPORAN_KAREPMU_MODUL.txt. Does not certify security; review report before sharing." \
+            --prerelease
