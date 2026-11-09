@@ -1,0 +1,116 @@
+name: Release ONE CLICK Vince Root Audit for Windows
+
+on:
+  push:
+    branches: [audit/vince-root-exposure-20261109]
+    paths:
+      - '.github/workflows/vince-root-audit-oneclick-release.yml'
+      - 'tools/root-exposure/JALANKAN_AUDIT_VINCE.cmd'
+      - 'tools/root-exposure/vince-security-audit.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-windows:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test Windows batch command parser with help mode
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmd.exe /d /s /c '"tools\root-exposure\JALANKAN_AUDIT_VINCE.cmd" /help'
+          if ($LASTEXITCODE -ne 0) { throw "Windows CMD help failed: $LASTEXITCODE" }
+      - name: Static checks - one-click safety and exact script source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $c = Get-Content -Raw 'tools/root-exposure/JALANKAN_AUDIT_VINCE.cmd'
+          $s = Get-Content -Raw 'tools/root-exposure/vince-security-audit.sh'
+          @('get-state', 'adb.exe', 'shell su -c', 'vince-root-audit.txt', 'notepad.exe', 'pause') | ForEach-Object {
+            if (-not $c.Contains($_)) { throw "Missing one-click step: $_" }
+          }
+          if (-not $c.Contains('0d809bb0aeeee4afd3be36a5157c8594dcc5aeaa')) { throw "Audit script source not commit-pinned" }
+          if (-not $c.Contains('dl.google.com/android/repository/platform-tools-latest-windows.zip')) { throw "ADB download is not from Google" }
+          if (-not $s.Contains('No shell commands modified packages')) { throw "Audit completion sentinel missing" }
+          if (-not $s.Contains('No keybox XML')) { throw "Audit keybox-privacy marker missing" }
+          $banned = @('resetprop ', 'setprop ', 'reboot ', 'magiskhide ', 'keybox.xml')
+          foreach ($f in @('tools/root-exposure/JALANKAN_AUDIT_VINCE.cmd')) {
+            $lines = Get-Content $f
+            foreach ($line in $lines) {
+              if ($line -match '^\s*(setprop|resetprop|magiskhide|reboot)\s') { throw "Unsafe command detected" }
+            }
+          }
+          "PASS: Windows CMD parsing and one-click controls validated."
+      - name: Hash one-click batch
+        shell: pwsh
+        run: |
+          Get-FileHash 'tools/root-exposure/JALANKAN_AUDIT_VINCE.cmd' -Algorithm SHA256
+
+  publish:
+    needs: validate-windows
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test original shell script and assemble one-click downloads
+        run: |
+          set -euo pipefail
+          sh -n tools/root-exposure/vince-security-audit.sh
+          mkdir -p output
+          cp tools/root-exposure/JALANKAN_AUDIT_VINCE.cmd output/
+          cp tools/root-exposure/vince-security-audit.sh output/
+          cat > output/PETUNJUK.txt <<'EOF'
+          VINCE ROOT AUDIT - SIAP DIKLIK DI WINDOWS 10/11
+
+          1. Ekstrak ZIP ini dengan klik kanan Extract All.
+          2. Sambungkan Redmi 5 Plus ke PC memakai kabel USB DATA.
+          3. Di HP aktifkan Opsi Developer > USB debugging.
+          4. Di folder hasil ekstrak, klik dua kali:
+                 JALANKAN_AUDIT_VINCE.cmd
+          5. Jika diminta izin USB debugging di HP, pilih Izinkan.
+          6. Jika diminta FinaSU Manager untuk ADB Shell, izinkan.
+          7. Program akan menyimpan vince-root-audit.txt di folder yang sama
+             dan membukanya dengan Notepad secara otomatis.
+
+          Skrip audit di dalam ZIP bersifat BACA-SAJА, tidak mengganti
+          kernel, modul, SELinux, keybox, ataupun data aplikasi.
+
+          Jika ADB belum terpasang, perintah ini otomatis mengambil
+          Android Platform-Tools untuk Windows dari server resmi Google.
+          Internet PC diperlukan untuk pengunduhan ADB jika belum ada.
+          Tidak perlu instal driver/ADB ulang jika sudah tersedia.
+
+          PENTING: Program ini TIDAK menghilangkan root, TIDAK menyembunyikan
+          modifikasi dari aplikasi bank, dan bukan jaminan login bank diterima.
+          Periksa file TXT sebelum dibagikan. Jangan kirim private keybox,
+          PIN, OTP, atau informasi perbankan.
+
+          Source:
+          https://github.com/sahila7128-beep/vince-kernel-build/tree/audit/vince-root-exposure-20261109/tools/root-exposure
+          EOF
+          (cd output && zip -q -9 ../VINCE_ROOT_AUDIT_SATU_KLIK_WINDOWS.zip JALANKAN_AUDIT_VINCE.cmd vince-security-audit.sh PETUNJUK.txt)
+          unzip -t VINCE_ROOT_AUDIT_SATU_KLIK_WINDOWS.zip
+          sha256sum output/JALANKAN_AUDIT_VINCE.cmd VINCE_ROOT_AUDIT_SATU_KLIK_WINDOWS.zip > SHA256SUMS.txt
+          cp SHA256SUMS.txt output/
+          cat SHA256SUMS.txt
+      - name: Publish release (direct CMD or self-contained ZIP)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="vince-root-audit-oneclick-20261109"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" output/JALANKAN_AUDIT_VINCE.cmd VINCE_ROOT_AUDIT_SATU_KLIK_WINDOWS.zip output/PETUNJUK.txt output/SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" output/JALANKAN_AUDIT_VINCE.cmd VINCE_ROOT_AUDIT_SATU_KLIK_WINDOWS.zip output/PETUNJUK.txt output/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target audit/vince-root-exposure-20261109 \
+              --title "VINCE C12-RC3 — One-Click Root Exposure Audit for Windows" \
+              --notes "Satu klik menjalankan AUDIT BACA-SAJА FinaSU/8 modul dari Windows. Perlu USB debugging, izin FinaSU, dan ADB yang diunduh otomatis dari Google bila belum ada. Tidak memodifikasi HP, tidak menghilangkan root, tidak menjamin m-banking akan menerima perangkat." \
+              --prerelease
+          fi
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease
