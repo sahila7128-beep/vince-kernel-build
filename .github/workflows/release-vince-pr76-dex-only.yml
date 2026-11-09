@@ -1,0 +1,155 @@
+name: Vince PR76 DEX-only release — verified direct module ZIP
+
+on:
+  push:
+    branches: [test/tee-v308-dex-only-vince]
+    paths:
+      - ".github/workflows/release-vince-pr76-dex-only.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  verify_and_publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run module repack source regression tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/alwaysstrong-oaep -p 'test_*.py' -v
+
+      - name: JDK 21 for independent Android OAEP/MGF1 interoperability proof
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Independently verify RSA-OAEP SHA256/MGF1 SHA1 semantics
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/oaep-proof
+          javac -d /tmp/oaep-proof tools/alwaysstrong-oaep/OaepDigestInterop.java
+          java -cp /tmp/oaep-proof OaepDigestInterop
+
+      - name: Download immutable previously built PR76 Inject ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Vince-TEE-PR76-DEXONLY-ENGINEERING-CANDIDATE
+          run-id: 42479979239
+          repository: sahila7128-beep/vince-kernel-build
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release
+
+      - name: Compare complete module checksum to original audited source-build
+        run: |
+          set -euo pipefail
+          filename='AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip'
+          test -f "release/$filename"
+          echo "5d1bd0ee2130674786752d9e2cf9fb9f01b3967f0a605b96adb670309a0befdb  release/$filename" | sha256sum -c -
+          unzip -t "release/$filename" | tail -2
+          grep -Fq "5d1bd0ee2130674786752d9e2cf9fb9f01b3967f0a605b96adb670309a0befdb" release/SHA256SUMS.txt
+
+      - name: Validate flashable module entrypoint, correct v308 engine and keybox retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          filename='release/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip'
+          mkdir -p /tmp/vince-module
+          unzip -q "$filename" -d /tmp/vince-module
+          cd /tmp/vince-module
+          grep -Fxq 'id=tricky_store' module.prop
+          grep -Fxq 'name=AlwaysStrong [Inject]' module.prop
+          grep -Fxq 'version=v1.0.5' module.prop
+          grep -Fxq 'ENGINE=inject' engine.sh
+          test -f customize.sh
+          test -f service.sh
+          test -f post-fs-data.sh
+          test -f attest.sh
+          test -f keybox_fetch.sh
+          test -f as_store.sh
+          test -f lib/arm64-v8a/libTEESimulator.so
+          test -f lib/arm64-v8a/libinject.so
+          test -f lib/arm64-v8a/libsupervisor.so
+          test -f zygisk/arm64-v8a.so
+          test -f tee_classes.dex
+          sha="$(sha256sum tee_classes.dex | cut -d' ' -f1)"
+          test "$sha" = '453744e949d8bd9013a76916c2579004e73ec0eddf59cacd9a62f29ea9271d7c'
+          # A pre-existing custom YuriKey keybox must not be overwritten by installer.
+          grep -Fq 'if [ -f "$CONFIG_DIR/keybox.xml" ]; then' customize.sh
+          grep -Fq 'keybox kept' customize.sh
+          # Auto refresh requires explicit custom-keybox ON to preserve existing keybox.
+          grep -Fq 'if as_on custom_keybox; then' keybox_fetch.sh
+          grep -Fq 'if ! as_on custom_keybox && as_on auto_keybox' service.sh
+          # Installation can remove conflicting root modules; the user must inspect list first.
+          grep -Fq 'CONFLICT_LIST=' customize.sh
+          # No kernel flashing data in the module.
+          ! find . -iname 'boot.img' -o -iname '*dtb' | grep -q .
+          # This trial keeps upstream scripts and module identity unchanged, not YuriKey secrets.
+          grep -Fq 'VINCE TEE v308 DEX-ONLY TRIAL' VINCE_TEE_V308_TRIAL.txt
+          find . -type f -name '*.sh' -print0 | xargs -0 -r -n1 bash -n
+          echo "PASS: no ZIP CRC failure, v308 engine digest pinned, module identity correct, keybox retention code present"
+
+      - name: Security evidence and safe install instructions
+        run: |
+          set -euo pipefail
+          cat > release/READ_ME_FIRST.txt <<'EOF'
+          EXPERIMENTAL — OFFLINE TESTED, NOT VALIDATED ON REDMI 5 PLUS.
+          
+          This single inner ZIP file is an INSTALLABLE FINASU MODULE.
+          DO NOT FLASH AS A KERNEL. Keep existing Vince-C12-RC3 kernel.
+          Baseline: upstream AlwaysStrong [Inject] v1.0.5 commit
+          54c2a70552bc477436e157fd3c6cbd8d43c0e897
+          v307 TEESimulator-RS replaced with v308 PR76 bytecode ONLY.
+          No keybox from YuriKey is bundled and NO USER KEYBOX is requested.
+          The original module ZIP as INSTALLED by the user was NOT provided,
+          so exact byte-for-byte equality to that specific installed APK/ZIP
+          cannot be proven. The reconstructed source baseline was audited,
+          and every original entry except tee_classes.dex was preserved byte-for-byte.
+          
+          STRICT TEST PLAN:
+          1. Save the CURRENT functioning AlwaysStrong official ZIP.
+          2. Keep the YuriKey keybox in its own secure, OFFLINE backup.
+          3. In AlwaysStrong WebUI, enable CUSTOM KEYBOX or disable auto keybox
+             refresh, else the hourly service might replace keybox.xml.
+          4. Review installed module IDs BEFORE installing; the original
+             installer can REMOVE known conflicts: Yurikey, TrickyStore,
+             other TEE simulators, PIF, etc. The eight installed module names
+             were not independently verified here.
+          5. Prefer tests only after backup and ability to boot into recovery.
+          6. FinaSU Manager > Modules > Install from storage > choose this ZIP.
+          7. After reboot compare Duck RSA-OAEP SHA256 roundtrip, Play Integrity,
+             Key Attestation, and essential app stability. No service guarantees.
+          8. If regression, reinstall prior original official Inject ZIP and restore
+             custom keybox if needed; do not wipe KeyStore or apps.
+          
+          Strong Integrity and Key Attestation do NOT prove physical locked bootloader.
+          PR76 itself is upstream OPEN; this is a scoped engineering experiment.
+          No claim about universal app acceptance or hardware attestation authenticity.
+          Detailed passing OFFLINE tests: 
+          https://github.com/sahila7128-beep/vince-kernel-build/actions/runs/42540210676
+          https://github.com/sahila7128-beep/vince-kernel-build/actions/runs/42479979239
+          THIS release verification workflow must also pass.
+          EOF
+
+      - name: Publish direct ZIP to GitHub PRE-release (not approved as final fix)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="vince-tee-pr76-dex-only-trial-20261109"
+          zip="release/AlwaysStrong-Inject-v1.0.5-Vince-TEE-PR76-DEXONLY-TRIAL.zip"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" "$zip" release/READ_ME_FIRST.txt release/SHA256SUMS.txt --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "$zip" release/READ_ME_FIRST.txt release/SHA256SUMS.txt \
+              -R "$GITHUB_REPOSITORY" \
+              --target test/tee-v308-dex-only-vince \
+              --title "Vince AlwaysStrong Inject PR76 — DEX-only TRIAL (not handset-validated)" \
+              --notes-file release/READ_ME_FIRST.txt --prerelease
+          fi
+          gh release view "$tag" -R "$GITHUB_REPOSITORY" --json url,assets,isPrerelease
