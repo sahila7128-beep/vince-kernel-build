@@ -1,0 +1,30 @@
+KAREPMU APK + MODUL ZIP - PEMERIKSAAN AMAN (BACA SAJA)
+
+Apa yang dilakukan:
+- Membaca nama paket di APK, bagian manifest, indikasi permission,
+  jumlah file DEX, library native dan arsitektur (jika ada).
+- Membaca daftar isi MODUL.zip serta module.prop, script boot, dan aturan
+  sepolicy yang ada dalam paket, tanpa memasang/menjalankannya.
+- Menulis LAPORAN_KAREPMU_MODUL.txt pada folder yang sama.
+
+Cara:
+1. Simpan file KAREPMU.apk dan MODUL.zip asli ke Downloads Windows.
+2. Ekstrak file paket pemeriksa ini (Extract All).
+3. Klik dua kali KLIK_2X_ANALISIS_KAREPMU.cmd.
+4. Notepad akan membuka LAPORAN_KAREPMU_MODUL.txt.
+5. Periksa seluruh laporan (terutama script modul) dan jangan bagikan
+   sandi, token atau data pelanggan. Setelah itu kirim TXT ke ChatGPT.
+
+PENTING:
+- Tidak memerlukan ADB, root, atau mengubah HP.
+- Tidak mengunggah file apa pun, tidak menggunakan internet.
+- Hasil analisis statis BUKAN sertifikat aman atau antivirus; kode dapat
+  disamarkan, mengenkripsi konfigurasi, atau mengunduh bagian tambahan.
+- Jangan pasang APK/modul pihak ketiga yang belum diuji ke HP yang
+  digunakan untuk WhatsApp pelanggan dan data usaha.
+- Gunakan WhatsApp dan WhatsApp Business resmi; keduanya bisa
+  dipakai bersama untuk tiga nomor (dua pada WhatsApp biasa).
+- Bila hanya ingin memakai tiga WhatsApp, device spoofer TIDAK diperlukan.
+
+Sumber skrip terbuka:
+https://github.com/sahila7128-beep/vince-kernel-build/tree/audit/karepmu-static-20261109/tools/karepmu-static
