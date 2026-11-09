@@ -1,0 +1,48 @@
+name: Vince OAEP MGF1 interoperability proof (independent JCA)
+on:
+  push:
+    branches: [test/tee-v308-dex-only-vince]
+    paths:
+      - '.github/workflows/vince-oaep-mgf1-regression.yml'
+      - 'tools/alwaysstrong-oaep/OaepDigestInterop.java'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-jca:
+    name: Verify digest mismatch and exact pinned upstream versions
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Compile and run independent RSA OAEP interoperability test
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vince-oaep-check
+          javac -d /tmp/vince-oaep-check tools/alwaysstrong-oaep/OaepDigestInterop.java
+          java -cp /tmp/vince-oaep-check OaepDigestInterop
+      - name: Verify original AlwaysStrong v1.0.5 and version-pinned engine source
+        run: |
+          set -euo pipefail
+          base='https://raw.githubusercontent.com'
+          curl -fsSL --retry 3 "$base/Guxin12/AlwaysStrong/54c2a70552bc477436e157fd3c6cbd8d43c0e897/build.sh" -o /tmp/alwaysstrong-build.sh
+          grep -Fqx 'TEE_TAG_DEFAULT="v6.0.1-307"' <(grep '^TEE_TAG_DEFAULT=' /tmp/alwaysstrong-build.sh)
+          rel='app/src/main/java/org/matrix/TEESimulator/interception/keystore/shim/SoftwareOperation.kt'
+          curl -fsSL --retry 3 "$base/Enginex0/TEESimulator-RS/6d241e56d6e8146cd67ed4ac3dadc9c632969549/$rel" -o /tmp/v307-software-operation.kt
+          curl -fsSL --retry 3 "$base/adamaru/TEESimulator-RS/f0cbd00e40e64b858f9801ee69db6cf4b9db6fdc/$rel" -o /tmp/v308-software-operation.kt
+          grep -Fq '} ?: mainDigest' /tmp/v307-software-operation.kt
+          grep -Fq 'params.rsaOaepMgfDigest.firstOrNull() ?: Digest.SHA1' /tmp/v308-software-operation.kt
+          if grep -Fq '} ?: mainDigest' /tmp/v308-software-operation.kt; then
+            echo 'ERROR: repaired engine still has v307 fallback' >&2
+            exit 1
+          fi
+          echo 'PASS: AlwaysStrong original pinned to v307; v307 wrong default; PR76 v308 corrected default'
+      - name: Explicit limitation
+        run: |
+          echo 'OFFLINE JCA TEST ONLY: no Redmi 5 Plus handset, firmware TEE, or Play Integrity test occurred.'
