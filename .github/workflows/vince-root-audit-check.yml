@@ -1,0 +1,42 @@
+name: Vince read-only root audit static validation
+on:
+  push:
+    branches: [audit/vince-root-exposure-20261109]
+    paths:
+      - ".github/workflows/vince-root-audit-check.yml"
+      - "tools/root-exposure/vince-security-audit.sh"
+      - "docs/VINCE_ROOT_EXPOSURE_AUDIT_20261109.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Check audit helper cannot modify the phone
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX shell syntax
+        run: |
+          set -euo pipefail
+          sh -n tools/root-exposure/vince-security-audit.sh
+          shellcheck -s sh tools/root-exposure/vince-security-audit.sh
+      - name: Ensure audit is read-only and does not access keys or use network
+        run: |
+          set -euo pipefail
+          script=tools/root-exposure/vince-security-audit.sh
+          if grep -nE '(^|[[:space:];])(rm|mv|cp|chmod|chown|mount|umount|setprop|resetprop|dd|curl|wget|pm[[:space:]]+clear|settings[[:space:]]+put|sepolicy[[:space:]]+apply|ksud[[:space:]]+sepolicy|reboot)([[:space:];]|$)' "$script"; then
+            echo 'AUDIT MUST NEVER MUTATE DEVICE' >&2
+            exit 1
+          fi
+          if grep -nE '(^|[[:space:];])(cat|grep|head|sed)[[:space:]]+.*(keybox[.]xml|/data/data/.*/|/data/user/0/)' "$script"; then
+            echo 'AUDIT MAY NOT READ PRIVATE KEYBOX OR APP CONTENT' >&2
+            exit 1
+          fi
+          grep -Fq 'READ ONLY' "$script"
+          grep -Fq 'No keybox XML' "$script"
+          grep -Fq 'No shell commands modified packages' "$script"
+          grep -Fq 'sha256sum "$_dex"' "$script"
+          echo 'PASS: syntax, code review guard, keybox privacy and source PR76 digest check'
